@@ -558,6 +558,7 @@ set(SLIC3R_GUI_SOURCES
     Utils/AstroBox.cpp
     Utils/AstroBox.hpp
     Utils/bambu_networking.hpp
+    Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.cpp
     Utils/Bonjour.cpp
     Utils/Bonjour.hpp
     Utils/CalibUtils.cpp
@@ -653,6 +654,7 @@ set(SLIC3R_GUI_SOURCES
 
 add_subdirectory(GUI/DeviceCore)
 add_subdirectory(GUI/DeviceTab)
+add_subdirectory(Utils/PJarczakLinuxBridge)
 
 if (WIN32)
     list(APPEND SLIC3R_GUI_SOURCES
