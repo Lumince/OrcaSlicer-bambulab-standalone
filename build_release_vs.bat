@@ -68,7 +68,7 @@ echo Using CMake generator: %CMAKE_GENERATOR%
 
 @REM Pack deps
 if "%1"=="pack" (
-    setlocal ENABLEDELAYEDEXPANSION 
+    setlocal ENABLEDELAYEDEXPANSION
     cd %WP%/deps/build
     for /f "tokens=2-4 delims=/ " %%a in ('date /t') do set build_date=%%c%%b%%a
     echo packing deps: OrcaSlicer_dep_win64_!build_date!_vs!VS_VERSION!.zip
@@ -97,7 +97,7 @@ if "%debug%"=="ON" (
 )
 echo build type set to %build_type%
 
-setlocal DISABLEDELAYEDEXPANSION 
+setlocal DISABLEDELAYEDEXPANSION
 cd deps
 mkdir %build_dir%
 cd %build_dir%
@@ -143,6 +143,8 @@ cd ..
 call scripts/run_gettext.bat
 cd %build_dir%
 cmake --build . --target install --config %build_type%
+call :copy_linux_bridge_runtime
+if errorlevel 1 exit /b 1
 
 :done
 @echo off
@@ -156,3 +158,60 @@ set /a "_mins=_remainder / 60"
 set /a "_secs=_remainder - _mins * 60"
 echo.
 echo Build completed in %_hours%h %_mins%m %_secs%s
+exit /b 0
+
+:copy_linux_bridge_runtime
+set "INSTALL_DIR=%WP%\%build_dir%\OrcaSlicer"
+set "HOST_RUNTIME_DIR=%WP%\tools\pjarczak_bambu_linux_host\runtime\linux-x86_64"
+
+if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host" (
+    echo Missing linux host runtime: %HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host
+    echo Build it first on Linux with:
+    echo   tools\pjarczak_bambu_linux_host\package_linux_host_runtime.sh
+    exit /b 1
+)
+
+if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host.runtime" (
+    echo Missing linux host runtime directory: %HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host.runtime
+    exit /b 1
+)
+
+if not exist "%INSTALL_DIR%" (
+    echo Missing install directory: %INSTALL_DIR%
+    exit /b 1
+)
+
+if not exist "%INSTALL_DIR%\pjarczak_bambu_networking_bridge.dll" (
+    if exist "%WP%\%build_dir%\pjarczak_bambu_networking_bridge.dll" (
+        copy /Y "%WP%\%build_dir%\pjarczak_bambu_networking_bridge.dll" "%INSTALL_DIR%\pjarczak_bambu_networking_bridge.dll" >nul
+    )
+)
+
+if not exist "%INSTALL_DIR%\pjarczak_bambu_networking_bridge.dll" (
+    if exist "%WP%\%build_dir%\src\%build_type%\pjarczak_bambu_networking_bridge.dll" (
+        copy /Y "%WP%\%build_dir%\src\%build_type%\pjarczak_bambu_networking_bridge.dll" "%INSTALL_DIR%\pjarczak_bambu_networking_bridge.dll" >nul
+    )
+)
+
+if not exist "%INSTALL_DIR%\pjarczak_bambu_networking_bridge.dll" (
+    echo Missing bridge DLL in install output: %INSTALL_DIR%\pjarczak_bambu_networking_bridge.dll
+    exit /b 1
+)
+
+copy /Y "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host" "%INSTALL_DIR%\pjarczak_bambu_linux_host" >nul
+if errorlevel 1 (
+    echo Failed to copy linux host binary into %INSTALL_DIR%
+    exit /b 1
+)
+
+if exist "%INSTALL_DIR%\pjarczak_bambu_linux_host.runtime" (
+    rmdir /S /Q "%INSTALL_DIR%\pjarczak_bambu_linux_host.runtime"
+)
+
+xcopy "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host.runtime" "%INSTALL_DIR%\pjarczak_bambu_linux_host.runtime\" /E /I /Y >nul
+if errorlevel 4 (
+    echo Failed to copy linux host runtime directory into %INSTALL_DIR%
+    exit /b 1
+)
+
+exit /b 0

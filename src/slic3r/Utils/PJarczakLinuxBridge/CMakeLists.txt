@@ -23,6 +23,11 @@ set_target_properties(pjarczak_bambu_networking_bridge PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
 )
 
+install(TARGETS pjarczak_bambu_networking_bridge
+    RUNTIME DESTINATION "."
+    LIBRARY DESTINATION "."
+)
+
 if (UNIX AND NOT APPLE)
     add_executable(pjarczak_bambu_linux_host
         ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_linux_host/main.cpp
@@ -31,7 +36,11 @@ if (UNIX AND NOT APPLE)
     )
     target_include_directories(pjarczak_bambu_linux_host PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(pjarczak_bambu_linux_host PRIVATE boost_headeronly boost_libs ${CMAKE_DL_LIBS} OpenSSL::Crypto)
+    target_link_options(pjarczak_bambu_linux_host PRIVATE -static-libstdc++ -static-libgcc)
     set_target_properties(pjarczak_bambu_linux_host PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+    )
+    install(TARGETS pjarczak_bambu_linux_host
+        RUNTIME DESTINATION "."
     )
 endif()

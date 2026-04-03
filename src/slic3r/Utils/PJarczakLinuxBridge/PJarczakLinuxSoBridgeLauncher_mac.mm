@@ -6,10 +6,17 @@
 namespace Slic3r::PJarczakLinuxBridge {
 
 namespace {
+
 const char* env_host_cmd()
 {
     return std::getenv("PJARCZAK_LINUX_HOST_CMD");
 }
+
+std::string wrapper_executable_name()
+{
+    return "pjarczak-bambu-linux-host-wrapper";
+}
+
 }
 
 std::string host_executable_name()
@@ -30,8 +37,9 @@ LaunchSpec build_default_launch_spec()
         spec.argv = {"/bin/sh", "-lc", cmd};
         return spec;
     }
-    spec.description = "mac via external linux wrapper";
-    spec.argv = {"pjarczak-bambu-linux-host-wrapper", sibling_binary_path(host_executable_name())};
+
+    spec.description = "mac via bundled linux wrapper";
+    spec.argv = {sibling_binary_path(wrapper_executable_name()), sibling_binary_path(host_executable_name())};
     return spec;
 }
 
