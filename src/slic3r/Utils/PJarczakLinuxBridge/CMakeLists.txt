@@ -44,3 +44,49 @@ if (UNIX AND NOT APPLE)
         RUNTIME DESTINATION "."
     )
 endif()
+
+if (APPLE)
+    set(PJARCZAK_MAC_WRAPPER_SCRIPT_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_macos_linux_wrapper/pjarczak_bambu_macos_linux_wrapper.sh)
+    add_custom_command(TARGET pjarczak_bambu_networking_bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_MAC_WRAPPER_SCRIPT_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pjarczak_bambu_macos_linux_wrapper.sh
+    )
+    install(FILES ${PJARCZAK_MAC_WRAPPER_SCRIPT_SOURCE}
+        DESTINATION "."
+        RENAME pjarczak_bambu_macos_linux_wrapper.sh
+    )
+endif()
+
+if (WIN32)
+    set(PJARCZAK_WSL_HELPER_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/pjarczak_wsl_run_host.sh)
+    set(PJARCZAK_WSL_INSTALLER_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/install_runtime.ps1)
+    set(PJARCZAK_WSL_INSTALLER_CMD_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/install_runtime.cmd)
+    set(PJARCZAK_WSL_VERIFY_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/verify_runtime.ps1)
+    set(PJARCZAK_RUNTIME_README_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/README_runtime_bridge.txt)
+    add_custom_command(TARGET pjarczak_bambu_networking_bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_WSL_HELPER_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pjarczak_wsl_run_host.sh
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_WSL_INSTALLER_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/install_runtime.ps1
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_WSL_INSTALLER_CMD_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/install_runtime.cmd
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_WSL_VERIFY_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/verify_runtime.ps1
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_RUNTIME_README_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/README_runtime_bridge.txt
+    )
+    install(FILES
+        ${PJARCZAK_WSL_HELPER_SOURCE}
+        ${PJARCZAK_WSL_INSTALLER_SOURCE}
+        ${PJARCZAK_WSL_INSTALLER_CMD_SOURCE}
+        ${PJARCZAK_WSL_VERIFY_SOURCE}
+        ${PJARCZAK_RUNTIME_README_SOURCE}
+        DESTINATION "."
+    )
+endif()

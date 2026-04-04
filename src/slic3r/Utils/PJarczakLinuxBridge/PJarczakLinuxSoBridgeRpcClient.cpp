@@ -21,15 +21,38 @@ RpcClient::~RpcClient()
     stop_locked();
 }
 
+void RpcClient::append_stderr_line(const std::string& line)
+{
+    std::lock_guard<std::mutex> lock(m_stderr_mutex);
+    if (!m_stderr_tail.empty())
+        m_stderr_tail += "\n";
+    m_stderr_tail += line;
+    constexpr std::size_t max_tail = 8192;
+    if (m_stderr_tail.size() > max_tail)
+        m_stderr_tail.erase(0, m_stderr_tail.size() - max_tail);
+}
+
+std::string RpcClient::stderr_summary() const
+{
+    std::lock_guard<std::mutex> lock(m_stderr_mutex);
+    return m_stderr_tail;
+}
+
 bool RpcClient::start_locked()
 {
     if (m_proc && m_proc->child.running())
         return true;
+
+    auto spec = build_default_launch_spec();
     try {
-        auto spec = build_default_launch_spec();
         if (spec.argv.empty()) {
             m_last_error = "empty launch spec";
             return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_stderr_mutex);
+            m_stderr_tail.clear();
         }
 
         bp::environment env = boost::this_process::environment();
@@ -44,21 +67,24 @@ bool RpcClient::start_locked()
         if (!exe_path.is_absolute())
             exe_path = bp::search_path(spec.argv[0]);
         if (exe_path.empty()) {
-            m_last_error = "bridge host executable not found: " + spec.argv[0];
+            m_last_error = "bridge host executable not found for " + spec.description + ": " + spec.argv[0];
             return false;
         }
 
         auto proc = std::make_unique<Proc>();
-        proc->child = bp::child(exe_path, bp::args(args), bp::std_in < proc->in, bp::std_out > proc->out, env);
+        proc->child = bp::child(exe_path, bp::args(args), bp::std_in < proc->in, bp::std_out > proc->out, bp::std_err > proc->err, env);
         m_proc = std::move(proc);
         m_reader_stop = false;
         if (m_reader.joinable())
             m_reader.join();
+        if (m_stderr_reader.joinable())
+            m_stderr_reader.join();
         m_reader = std::thread([this] { reader_loop(); });
+        m_stderr_reader = std::thread([this] { stderr_reader_loop(); });
         m_last_error.clear();
         return true;
     } catch (const std::exception& e) {
-        m_last_error = e.what();
+        m_last_error = "bridge host start failed (" + spec.description + "): " + e.what();
         m_proc.reset();
         return false;
     }
@@ -75,6 +101,8 @@ void RpcClient::stop_locked()
     }
     if (m_reader.joinable())
         m_reader.join();
+    if (m_stderr_reader.joinable())
+        m_stderr_reader.join();
     m_proc.reset();
 }
 
@@ -90,26 +118,53 @@ bool RpcClient::is_started() const
     return m_proc && m_proc->child.running();
 }
 
-void RpcClient::reader_loop()
+void RpcClient::stderr_reader_loop()
 {
-    while (!m_reader_stop) {
-        std::string line;
+    for (;;) {
+        Proc* proc = nullptr;
         {
             std::lock_guard<std::mutex> lock(m_state_mutex);
             if (!m_proc)
                 break;
-            if (!std::getline(m_proc->out, line)) {
-                m_last_error = "bridge host closed stdout";
-                auto pending = m_pending;
-                m_pending.clear();
-                for (auto& it : pending) {
-                    std::lock_guard<std::mutex> plock(it.second->mutex);
-                    it.second->payload = {{"ok", false}, {"error", m_last_error}};
-                    it.second->ready = true;
-                    it.second->cv.notify_all();
-                }
+            proc = m_proc.get();
+        }
+
+        std::string line;
+        if (!std::getline(proc->err, line))
+            break;
+        if (!line.empty())
+            append_stderr_line(line);
+    }
+}
+
+void RpcClient::reader_loop()
+{
+    for (;;) {
+        Proc* proc = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_state_mutex);
+            if (!m_proc)
                 break;
+            proc = m_proc.get();
+        }
+
+        std::string line;
+        if (!std::getline(proc->out, line)) {
+            std::string error = "bridge host closed stdout";
+            const std::string stderr = stderr_summary();
+            if (!stderr.empty())
+                error += "; stderr: " + stderr;
+            std::lock_guard<std::mutex> lock(m_state_mutex);
+            m_last_error = error;
+            auto pending = m_pending;
+            m_pending.clear();
+            for (auto& it : pending) {
+                std::lock_guard<std::mutex> plock(it.second->mutex);
+                it.second->payload = {{"ok", false}, {"error", m_last_error}};
+                it.second->ready = true;
+                it.second->cv.notify_all();
             }
+            break;
         }
 
         RpcFrame reply;
@@ -209,4 +264,4 @@ std::string RpcClient::last_error() const
     return m_last_error;
 }
 
-}
+} // namespace Slic3r::PJarczakLinuxBridge

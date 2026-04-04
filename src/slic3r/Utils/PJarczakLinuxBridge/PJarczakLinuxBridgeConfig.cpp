@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -39,7 +40,7 @@ bool expected_machine_matches(std::uint16_t machine)
 {
 #if defined(__x86_64__) || defined(_M_X64)
     return machine == EM_X86_64;
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
     return machine == EM_AARCH64;
 #else
     (void)machine;
@@ -58,6 +59,17 @@ std::string env_or(const char* name, const char* fallback)
     if (const char* v = std::getenv(name))
         return v;
     return fallback;
+}
+
+bool env_flag_enabled(const char* name)
+{
+    const char* v = std::getenv(name);
+    if (!v || !*v)
+        return false;
+    std::string s(v);
+    for (char& ch : s)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return s == "1" || s == "true" || s == "yes" || s == "on";
 }
 
 boost::filesystem::path process_dir_path()
@@ -83,16 +95,26 @@ const nlohmann::json* find_manifest_entry(const nlohmann::json& root, const std:
     return nullptr;
 }
 
-}
+} // namespace
 
 bool enabled()
 {
+    if (env_flag_enabled("PJARCZAK_DISABLE_LINUX_BRIDGE"))
+        return false;
+    if (env_flag_enabled("PJARCZAK_FORCE_LINUX_BRIDGE"))
+        return true;
+#if defined(_MSC_VER) || defined(_WIN32)
     return true;
+#elif defined(__WXMAC__) || defined(__APPLE__)
+    return true;
+#else
+    return false;
+#endif
 }
 
 bool source_module_is_network_module()
 {
-    return true;
+    return enabled();
 }
 
 bool should_force_linux_plugin_payload(const std::string& plugin_name)
@@ -354,4 +376,4 @@ std::vector<std::string> ota_copy_extensions()
     return {".so", ".json"};
 }
 
-}
+} // namespace Slic3r::PJarczakLinuxBridge
