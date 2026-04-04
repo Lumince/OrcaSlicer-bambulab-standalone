@@ -21,6 +21,7 @@ REQUIRED_DEV_PACKAGES=(
     libssl-dev
     libtool
     libudev-dev
+    nlohmann-json3-dev
     clang
     lld
     ninja-build
