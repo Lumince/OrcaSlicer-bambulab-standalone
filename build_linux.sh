@@ -7,6 +7,11 @@ SCRIPT_PATH=$(dirname "$(readlink -f "${0}")")
 
 pushd "${SCRIPT_PATH}" > /dev/null
 
+if [[ ! -f "${SCRIPT_PATH}/src/nlohmann/json.hpp" ]]; then
+    echo "Missing src/nlohmann/json.hpp - downloading..."
+    python3 "${SCRIPT_PATH}/tools/pjarczak_bambu_runtime/fetch_nlohmann_json.py"
+fi
+
 function usage() {
     echo "Usage: ./${SCRIPT_NAME} [-1][-b][-c][-d][-D][-e][-h][-i][-j N][-p][-r][-s][-t][-u][-l][-L]"
     echo "   -1: limit builds to one core (where possible)"
@@ -110,14 +115,18 @@ function check_available_memory_and_disk() {
     MIN_DISK_KB=$((10 * 1024 * 1024))
 
     if [[ ${FREE_MEM_GB} -le ${MIN_MEM_GB} ]] ; then
-        echo -e "\nERROR: Orca Slicer Builder requires at least ${MIN_MEM_GB}G of 'available' mem (system has only ${FREE_MEM_GB}G available)"
+        echo -e "
+ERROR: Orca Slicer Builder requires at least ${MIN_MEM_GB}G of 'available' mem (system has only ${FREE_MEM_GB}G available)"
         echo && free --human && echo
         echo "Invoke with -r to skip RAM and disk checks."
         exit 2
     fi
 
     if [[ ${FREE_DISK_KB} -le ${MIN_DISK_KB} ]] ; then
-        echo -e "\nERROR: Orca Slicer Builder requires at least $(echo "${MIN_DISK_KB}" |awk '{ printf "%.1fG\n", $1/1024/1024; }') (system has only $(echo "${FREE_DISK_KB}" | awk '{ printf "%.1fG\n", $1/1024/1024; }') disk free)"
+        echo -e "
+ERROR: Orca Slicer Builder requires at least $(echo "${MIN_DISK_KB}" |awk '{ printf "%.1fG
+", $1/1024/1024; }') (system has only $(echo "${FREE_DISK_KB}" | awk '{ printf "%.1fG
+", $1/1024/1024; }') disk free)"
         echo && df --human-readable . && echo
         echo "Invoke with -r to skip ram and disk checks."
         exit 1
@@ -157,11 +166,11 @@ elif [[ "${DISTRIBUTION_LIKE}" == *"suse"* ]] ; then
 fi
 
 if [ ! -f "./scripts/linux.d/${DISTRIBUTION}" ] ; then
-    echo "Your distribution \"${DISTRIBUTION}\" is not supported by system-dependency scripts in ./scripts/linux.d/"
+    echo "Your distribution "${DISTRIBUTION}" is not supported by system-dependency scripts in ./scripts/linux.d/"
     echo "Please resolve dependencies manually and contribute a script for your distribution to upstream."
     exit 1
 else
-    echo "resolving system dependencies for distribution \"${DISTRIBUTION}\" ..."
+    echo "resolving system dependencies for distribution "${DISTRIBUTION}" ..."
     # shellcheck source=/dev/null
     source "./scripts/linux.d/${DISTRIBUTION}"
 fi
@@ -234,11 +243,7 @@ if [[ -n "${BUILD_ORCA}" ]] || [[ -n "${BUILD_TESTS}" ]] ; then
         BUILD_ARGS+=(-DORCA_UPDATER_SIG_KEY="${ORCA_UPDATER_SIG_KEY}")
     fi
 
-    print_and_run cmake -S . -B $BUILD_DIR "${CMAKE_C_CXX_COMPILER_CLANG[@]}" "${CMAKE_LLD_LINKER_ARGS[@]}" -G "Ninja Multi-Config" \
--DSLIC3R_PCH=${SLIC3R_PRECOMPILED_HEADERS} \
--DORCA_TOOLS=ON \
-"${COLORED_OUTPUT}" \
-"${BUILD_ARGS[@]}"
+    print_and_run cmake -S . -B $BUILD_DIR "${CMAKE_C_CXX_COMPILER_CLANG[@]}" "${CMAKE_LLD_LINKER_ARGS[@]}" -G "Ninja Multi-Config" -DSLIC3R_PCH=${SLIC3R_PRECOMPILED_HEADERS} -DORCA_TOOLS=ON "${COLORED_OUTPUT}" "${BUILD_ARGS[@]}"
     echo "done"
     if [[ -n "${BUILD_ORCA}" ]]; then
 	echo "Building OrcaSlicer ..."
@@ -270,6 +275,8 @@ if [[ -n "${BUILD_IMAGE}" || -n "${BUILD_ORCA}" ]] ; then
 fi
 
 elapsed=$SECONDS
-printf "\nBuild completed in %dh %dm %ds\n" $((elapsed/3600)) $((elapsed%3600/60)) $((elapsed%60))
+printf "
+Build completed in %dh %dm %ds
+" $((elapsed/3600)) $((elapsed%3600/60)) $((elapsed%60))
 
 popd > /dev/null # ${SCRIPT_PATH}

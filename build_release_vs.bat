@@ -3,6 +3,9 @@
 set WP=%CD%
 set _START_TIME=%TIME%
 
+call :ensure_nlohmann_json
+if errorlevel 1 exit /b 1
+
 @REM Check for Ninja Multi-Config option (-x)
 set USE_NINJA=0
 for %%a in (%*) do (
@@ -215,3 +218,20 @@ if errorlevel 4 (
 )
 
 exit /b 0
+
+:ensure_nlohmann_json
+if exist "%WP%\src\nlohmann\json.hpp" exit /b 0
+
+if not exist "%WP%\tools\pjarczak_bambu_runtime\fetch_nlohmann_json.py" (
+    echo Missing helper: %WP%\tools\pjarczak_bambu_runtime\fetch_nlohmann_json.py
+    exit /b 1
+)
+
+echo Missing src\nlohmann\json.hpp - downloading...
+py -3 "%WP%\tools\pjarczak_bambu_runtime\fetch_nlohmann_json.py"
+if not errorlevel 1 exit /b 0
+python "%WP%\tools\pjarczak_bambu_runtime\fetch_nlohmann_json.py"
+if not errorlevel 1 exit /b 0
+
+echo Failed to fetch nlohmann/json.hpp
+exit /b 1

@@ -8,6 +8,7 @@
 
 #include <dlfcn.h>
 #include <boost/filesystem/operations.hpp>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
@@ -23,6 +24,15 @@ struct TunnelLoggerContext {
     std::int64_t tunnel_id{0};
     void (*free_f)(const char*){nullptr};
 };
+
+bool path_exists(const boost::filesystem::path& path)
+{
+    FILE* f = std::fopen(path.string().c_str(), "rb");
+    if (!f)
+        return false;
+    std::fclose(f);
+    return true;
+}
 
 std::string env_or(const char* name, const char* fallback)
 {
@@ -188,7 +198,7 @@ void LinuxPluginHost::load_modules()
 {
     const boost::filesystem::path plugin_folder = boost::filesystem::path(env_or("PJARCZAK_BAMBU_PLUGIN_DIR", "."));
     std::string manifest_reason;
-    const bool have_manifest = boost::filesystem::exists(linux_payload_manifest_path(plugin_folder));
+    const bool have_manifest = path_exists(linux_payload_manifest_path(plugin_folder));
     const bool manifest_ok = !have_manifest || validate_linux_payload_set_against_manifest(plugin_folder, &manifest_reason);
 
     if (!m_network) {
@@ -212,7 +222,7 @@ void LinuxPluginHost::load_modules()
     if (!m_live555) {
         const auto path = resolve_payload_path(plugin_folder, "PJARCZAK_BAMBU_LIVE555_SO", linux_live555_library_name().c_str());
         std::string reason;
-        if ((!have_manifest || boost::filesystem::exists(path)) && validate_linux_payload_file(path, &reason))
+        if ((!have_manifest || path_exists(path)) && validate_linux_payload_file(path, &reason))
             m_live555 = dlopen(path.c_str(), RTLD_LAZY | RTLD_GLOBAL);
     }
     if (!m_source) {

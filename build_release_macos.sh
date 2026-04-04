@@ -100,7 +100,7 @@ if [ -z "$CMAKE_IGNORE_PREFIX_PATH" ]; then
   export CMAKE_IGNORE_PREFIX_PATH="/opt/local:/usr/local:/opt/homebrew"
 fi
 
-CMAKE_VERSION=$(cmake --version | head -1 | sed 's/[^0-9]*\([0-9]*\).*/\1/')
+CMAKE_VERSION=$(cmake --version | head -1 | sed 's/[^0-9]*\([0-9]*\).*//')
 if [ "$CMAKE_VERSION" -ge 4 ] 2>/dev/null; then
   export CMAKE_POLICY_VERSION_MINIMUM=3.5
   export CMAKE_POLICY_COMPAT="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
@@ -119,6 +119,10 @@ echo " - CMAKE_IGNORE_PREFIX_PATH: $CMAKE_IGNORE_PREFIX_PATH"
 echo
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$PROJECT_DIR/src/nlohmann/json.hpp" ]; then
+    echo "Missing src/nlohmann/json.hpp - downloading..."
+    python3 "$PROJECT_DIR/tools/pjarczak_bambu_runtime/fetch_nlohmann_json.py"
+fi
 PROJECT_BUILD_DIR="$PROJECT_DIR/build/$ARCH"
 DEPS_DIR="$PROJECT_DIR/deps"
 HOST_RUNTIME_DIR="$PROJECT_DIR/tools/pjarczak_bambu_linux_host/runtime/linux-x86_64"
@@ -177,13 +181,7 @@ build_deps() {
                 mkdir -p "$DEPS"
                 cd "$DEPS_BUILD_DIR"
                 if [ "1." != "$BUILD_ONLY". ]; then
-                    cmake "${DEPS_DIR}" \
-                        -G "${DEPS_CMAKE_GENERATOR}" \
-                        -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
-                        -DCMAKE_OSX_ARCHITECTURES:STRING="${_ARCH}" \
-                        -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}" \
-                        -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}" \
-                        ${CMAKE_POLICY_COMPAT}
+                    cmake "${DEPS_DIR}"                         -G "${DEPS_CMAKE_GENERATOR}"                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"                         -DCMAKE_OSX_ARCHITECTURES:STRING="${_ARCH}"                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}"                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}"                         ${CMAKE_POLICY_COMPAT}
                 fi
                 cmake --build . --config "$BUILD_CONFIG" --target deps
             )
@@ -213,16 +211,7 @@ build_slicer() {
                 mkdir -p "$PROJECT_BUILD_DIR"
                 cd "$PROJECT_BUILD_DIR"
                 if [ "1." != "$BUILD_ONLY". ]; then
-                    cmake "${PROJECT_DIR}" \
-                        -G "${SLICER_CMAKE_GENERATOR}" \
-                        -DORCA_TOOLS=ON \
-                        ${ORCA_UPDATER_SIG_KEY:+-DORCA_UPDATER_SIG_KEY="$ORCA_UPDATER_SIG_KEY"} \
-                        ${BUILD_TESTS:+-DBUILD_TESTS=ON} \
-                        -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
-                        -DCMAKE_OSX_ARCHITECTURES="${_ARCH}" \
-                        -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}" \
-                        -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}" \
-                        ${CMAKE_POLICY_COMPAT}
+                    cmake "${PROJECT_DIR}"                         -G "${SLICER_CMAKE_GENERATOR}"                         -DORCA_TOOLS=ON                         ${ORCA_UPDATER_SIG_KEY:+-DORCA_UPDATER_SIG_KEY="$ORCA_UPDATER_SIG_KEY"}                         ${BUILD_TESTS:+-DBUILD_TESTS=ON}                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"                         -DCMAKE_OSX_ARCHITECTURES="${_ARCH}"                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}"                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}"                         ${CMAKE_POLICY_COMPAT}
                 fi
                 cmake --build . --config "$BUILD_CONFIG" --target "$SLICER_BUILD_TARGET"
                 cmake --install . --config "$BUILD_CONFIG"
@@ -348,4 +337,6 @@ if [ "1." == "$PACK_DEPS". ]; then
 fi
 
 elapsed=$SECONDS
-printf "\nBuild completed in %dh %dm %ds\n" $((elapsed/3600)) $((elapsed%3600/60)) $((elapsed%60))
+printf "
+Build completed in %dh %dm %ds
+" $((elapsed/3600)) $((elapsed%3600/60)) $((elapsed%60))
