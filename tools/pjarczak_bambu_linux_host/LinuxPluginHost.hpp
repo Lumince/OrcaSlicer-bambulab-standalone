@@ -53,6 +53,8 @@ private:
     std::shared_ptr<HostCallbackReplyState> register_callback_request(std::int64_t request_id);
     void unregister_callback_request(std::int64_t request_id);
     void set_callback_reply(std::int64_t request_id, const std::string& value);
+    static void tunnel_logger_trampoline(void* context, int level, const char* msg);
+    void handle_tunnel_log(std::int64_t tunnel_id, int level, const char* msg, void (*free_f)(const char*));
 
     template <typename T>
     T net(const char* name)
@@ -79,6 +81,7 @@ private:
     std::deque<nlohmann::json> m_events;
     std::map<std::int64_t, std::shared_ptr<HostJobState>> m_jobs;
     std::map<std::int64_t, std::shared_ptr<HostCallbackReplyState>> m_callback_replies;
+    std::map<std::int64_t, void*> m_tunnel_logger_contexts;
     std::atomic<std::int64_t> m_next_wait_request{1};
     std::atomic<std::int64_t> m_next_callback_request{1};
 };

@@ -17,6 +17,12 @@ namespace Slic3r::PJarczakLinuxBridge {
 
 namespace {
 
+struct TunnelLoggerContext {
+    LinuxPluginHost* host{nullptr};
+    std::int64_t tunnel_id{0};
+    void (*free_f)(const char*){nullptr};
+};
+
 std::string env_or(const char* name, const char* fallback)
 {
     if (const char* v = std::getenv(name))
@@ -34,7 +40,6 @@ std::string resolve_payload_path(const boost::filesystem::path& plugin_folder, c
     }
     return (plugin_folder / fallback_name).string();
 }
-
 
 std::map<std::string, std::string> json_to_string_map(const nlohmann::json& j)
 {
@@ -97,7 +102,7 @@ nlohmann::json wait_string_callback(Invoke&& invoke)
         return {{"ok", true}, {"value", ret}};
     std::unique_lock<std::mutex> lock(m);
     if (!cv.wait_for(lock, 30s, [&] { return ready; }))
-        return {{"ok", true}, {"value", BBL::BAMBU_NETWORK_ERR_TIMEOUT}};
+        return {{"ok", true}, {"value", BAMBU_NETWORK_ERR_TIMEOUT}};
     return {{"ok", true}, {"value", 0}, {"result", result}};
 }
 
@@ -122,7 +127,7 @@ nlohmann::json wait_string_int_callback(Invoke&& invoke)
         return {{"ok", true}, {"value", ret}};
     std::unique_lock<std::mutex> lock(m);
     if (!cv.wait_for(lock, 30s, [&] { return ready; }))
-        return {{"ok", true}, {"value", BBL::BAMBU_NETWORK_ERR_TIMEOUT}};
+        return {{"ok", true}, {"value", BAMBU_NETWORK_ERR_TIMEOUT}};
     return {{"ok", true}, {"value", 0}, {"result", result}, {"status", status}};
 }
 
@@ -145,7 +150,7 @@ nlohmann::json wait_model_task_callback(Invoke&& invoke)
         return {{"ok", true}, {"value", ret}};
     std::unique_lock<std::mutex> lock(m);
     if (!cv.wait_for(lock, 30s, [&] { return ready; }))
-        return {{"ok", true}, {"value", BBL::BAMBU_NETWORK_ERR_TIMEOUT}};
+        return {{"ok", true}, {"value", BAMBU_NETWORK_ERR_TIMEOUT}};
     return {{"ok", true}, {"value", 0}, {"subtask", subtask}};
 }
 
@@ -154,6 +159,28 @@ nlohmann::json wait_model_task_callback(Invoke&& invoke)
 LinuxPluginHost::LinuxPluginHost()
 {
     load_modules();
+}
+
+void LinuxPluginHost::tunnel_logger_trampoline(void* context, int level, const char* msg)
+{
+    auto* ctx = static_cast<TunnelLoggerContext*>(context);
+    if (!ctx) {
+        return;
+    }
+    if (!ctx->host) {
+        if (ctx->free_f && msg)
+            ctx->free_f(msg);
+        return;
+    }
+    ctx->host->handle_tunnel_log(ctx->tunnel_id, level, msg, ctx->free_f);
+}
+
+void LinuxPluginHost::handle_tunnel_log(std::int64_t tunnel_id, int level, const char* msg, void (*free_f)(const char*))
+{
+    const std::string copied = std::string(msg ? msg : "");
+    queue_tunnel_event(tunnel_id, "logger", {{"level", level}, {"message", copied}});
+    if (free_f && msg)
+        free_f(msg);
 }
 
 void LinuxPluginHost::load_modules()
@@ -646,8 +673,56 @@ nlohmann::json LinuxPluginHost::handle(const std::string& method, const nlohmann
         return j;
     }
     if (method == "src.close") { auto f = src<void (*)(Bambu_Tunnel)>("Bambu_Close"); auto t = lookup_tunnel(); if (!f || !t) return not_supported(method); f(t); return {{"ok", true}, {"value", 0}}; }
-    if (method == "src.destroy") { auto f = src<void (*)(Bambu_Tunnel)>("Bambu_Destroy"); const auto id = payload.value("tunnel", 0LL); Bambu_Tunnel t = nullptr; { std::lock_guard<std::mutex> lock(m_state_mutex); auto it = m_tunnels.find(id); if (it != m_tunnels.end()) { t = static_cast<Bambu_Tunnel>(it->second); m_tunnels.erase(it); } } if (!f || !t) return not_supported(method); f(t); return {{"ok", true}, {"value", 0}}; }
-    if (method == "src.set_logger") { auto f = src<void (*)(Bambu_Tunnel, Logger, void*)>("Bambu_SetLogger"); auto free_f = src<void (*)(tchar const*)>("Bambu_FreeLogMsg"); auto t = lookup_tunnel(); const auto tunnel_id = payload.value("tunnel", 0LL); if (!f || !t) return not_supported(method); f(t, [this, tunnel_id, free_f](void*, int level, tchar const* msg) { const std::string copied = std::string(msg ? msg : ""); queue_tunnel_event(tunnel_id, "logger", {{"level", level}, {"message", copied}}); if (free_f && msg) free_f(msg); }, nullptr); return {{"ok", true}, {"value", 0}}; }
+    if (method == "src.destroy") {
+        auto f = src<void (*)(Bambu_Tunnel)>("Bambu_Destroy");
+        const auto id = payload.value("tunnel", 0LL);
+        Bambu_Tunnel t = nullptr;
+        void* logger_ctx = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_state_mutex);
+            auto it = m_tunnels.find(id);
+            if (it != m_tunnels.end()) {
+                t = static_cast<Bambu_Tunnel>(it->second);
+                m_tunnels.erase(it);
+            }
+            auto ctx_it = m_tunnel_logger_contexts.find(id);
+            if (ctx_it != m_tunnel_logger_contexts.end()) {
+                logger_ctx = ctx_it->second;
+                m_tunnel_logger_contexts.erase(ctx_it);
+            }
+        }
+        if (!f || !t) {
+            if (logger_ctx)
+                delete static_cast<TunnelLoggerContext*>(logger_ctx);
+            return not_supported(method);
+        }
+        f(t);
+        if (logger_ctx)
+            delete static_cast<TunnelLoggerContext*>(logger_ctx);
+        return {{"ok", true}, {"value", 0}};
+    }
+    if (method == "src.set_logger") {
+        auto f = src<void (*)(Bambu_Tunnel, Logger, void*)>("Bambu_SetLogger");
+        auto free_f = src<void (*)(tchar const*)>("Bambu_FreeLogMsg");
+        auto t = lookup_tunnel();
+        const auto tunnel_id = payload.value("tunnel", 0LL);
+        if (!f || !t) return not_supported(method);
+
+        auto* logger_ctx = new TunnelLoggerContext{this, tunnel_id, reinterpret_cast<void (*)(const char*)>(free_f)};
+        {
+            std::lock_guard<std::mutex> lock(m_state_mutex);
+            auto it = m_tunnel_logger_contexts.find(tunnel_id);
+            if (it != m_tunnel_logger_contexts.end()) {
+                delete static_cast<TunnelLoggerContext*>(it->second);
+                it->second = logger_ctx;
+            } else {
+                m_tunnel_logger_contexts[tunnel_id] = logger_ctx;
+            }
+        }
+
+        f(t, &LinuxPluginHost::tunnel_logger_trampoline, logger_ctx);
+        return {{"ok", true}, {"value", 0}};
+    }
 
     return not_supported(method);
 }
