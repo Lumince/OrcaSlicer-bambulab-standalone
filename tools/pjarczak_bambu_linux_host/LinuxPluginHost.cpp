@@ -7,6 +7,7 @@
 #include "../../src/slic3r/Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp"
 
 #include <dlfcn.h>
+#include <boost/filesystem/operations.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
