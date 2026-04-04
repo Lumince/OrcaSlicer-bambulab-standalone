@@ -4,9 +4,7 @@
 #include <string>
 #include <nlohmann/json.hpp>
 
-#if __has_include("../../../libslic3r/ProjectTask.hpp")
-#include "../../../libslic3r/ProjectTask.hpp"
-#else
+#if defined(PJARCZAK_LINUX_BRIDGE_STANDALONE_HOST) || !__has_include("../../../libslic3r/ProjectTask.hpp")
 namespace Slic3r {
 class BBLModelTask {
 public:
@@ -21,6 +19,8 @@ public:
 };
 typedef std::function<void(BBLModelTask* subtask)> OnGetSubTaskFn;
 }
+#else
+#include "../../../libslic3r/ProjectTask.hpp"
 #endif
 
 namespace Slic3r::PJarczakLinuxBridge {
