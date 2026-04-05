@@ -7,11 +7,6 @@ SCRIPT_PATH=$(dirname "$(readlink -f "${0}")")
 
 pushd "${SCRIPT_PATH}" > /dev/null
 
-if [[ ! -f "${SCRIPT_PATH}/src/nlohmann/json.hpp" ]]; then
-    echo "Missing src/nlohmann/json.hpp - downloading..."
-    python3 "${SCRIPT_PATH}/tools/pjarczak_bambu_runtime/fetch_nlohmann_json.py"
-fi
-
 function usage() {
     echo "Usage: ./${SCRIPT_NAME} [-1][-b][-c][-d][-D][-e][-h][-i][-j N][-p][-r][-s][-t][-u][-l][-L]"
     echo "   -1: limit builds to one core (where possible)"

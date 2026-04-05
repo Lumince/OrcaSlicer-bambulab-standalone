@@ -119,10 +119,6 @@ echo " - CMAKE_IGNORE_PREFIX_PATH: $CMAKE_IGNORE_PREFIX_PATH"
 echo
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ ! -f "$PROJECT_DIR/src/nlohmann/json.hpp" ]; then
-    echo "Missing src/nlohmann/json.hpp - downloading..."
-    python3 "$PROJECT_DIR/tools/pjarczak_bambu_runtime/fetch_nlohmann_json.py"
-fi
 PROJECT_BUILD_DIR="$PROJECT_DIR/build/$ARCH"
 DEPS_DIR="$PROJECT_DIR/deps"
 HOST_RUNTIME_DIR="$PROJECT_DIR/tools/pjarczak_bambu_linux_host/runtime/linux-x86_64"
