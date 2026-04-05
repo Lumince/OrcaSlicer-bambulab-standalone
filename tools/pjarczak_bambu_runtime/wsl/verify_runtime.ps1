@@ -1,75 +1,115 @@
 param(
-    [string]$Distro = $(if ($env:PJARCZAK_WSL_DISTRO) { $env:PJARCZAK_WSL_DISTRO } else { 'PJARCZAK-BAMBU' })
+    [string]$PackageDir = "",
+    [string]$DistroName = "",
+    [string]$PluginCacheDir = "",
+    [switch]$AllowMissingLinuxPlugin
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Find-WslExe {
-    foreach ($candidate in @((Join-Path $env:WINDIR 'System32\wsl.exe'), (Join-Path $env:WINDIR 'Sysnative\wsl.exe'))) {
-        if (Test-Path $candidate) {
-            return $candidate
+function Get-ScriptDir {
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        return $PSScriptRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        return (Split-Path -Parent $PSCommandPath)
+    }
+    if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+        return (Split-Path -Parent $MyInvocation.MyCommand.Path)
+    }
+    return (Get-Location).Path
+}
+
+function To-WslPath([string]$Path) {
+    $full = [System.IO.Path]::GetFullPath($Path)
+    if ($full.Length -ge 2 -and $full[1] -eq ':') {
+        $drive = $full.Substring(0, 1).ToLowerInvariant()
+        $tail = $full.Substring(2).Replace('\', '/')
+        if ($tail.StartsWith('/')) {
+            $tail = $tail.Substring(1)
         }
+        return "/mnt/$drive/$tail"
     }
-    $cmd = Get-Command wsl.exe -ErrorAction SilentlyContinue
-    if ($cmd) {
-        return $cmd.Source
+    return $full.Replace('\', '/')
+}
+
+if ([string]::IsNullOrWhiteSpace($PackageDir)) {
+    $PackageDir = Get-ScriptDir
+}
+$PackageDir = [System.IO.Path]::GetFullPath($PackageDir)
+
+if ([string]::IsNullOrWhiteSpace($PluginCacheDir)) {
+    if ($env:PJARCZAK_BAMBU_WINDOWS_PLUGIN_CACHE_DIR) {
+        $PluginCacheDir = $env:PJARCZAK_BAMBU_WINDOWS_PLUGIN_CACHE_DIR
+    } elseif ($env:APPDATA) {
+        $PluginCacheDir = Join-Path $env:APPDATA 'OrcaSlicer\plugins'
     }
+}
+if (-not [string]::IsNullOrWhiteSpace($PluginCacheDir)) {
+    $PluginCacheDir = [System.IO.Path]::GetFullPath($PluginCacheDir)
+}
+
+if ([string]::IsNullOrWhiteSpace($DistroName)) {
+    $distroFile = Join-Path $PackageDir 'pjarczak_wsl_distro.txt'
+    if (Test-Path $distroFile) {
+        $DistroName = (Get-Content $distroFile -Raw).Trim()
+    }
+}
+if ([string]::IsNullOrWhiteSpace($DistroName)) {
+    $DistroName = 'OrcaSlicerRuntime'
+}
+
+$requiredFiles = @(
+    'pjarczak_bambu_networking_bridge.dll',
+    'pjarczak_wsl_distro.txt',
+    'install_runtime.ps1',
+    'verify_runtime.ps1',
+    'pjarczak_wsl_run_host.sh',
+    'pjarczak_bambu_linux_host'
+)
+
+foreach ($name in $requiredFiles) {
+    $path = Join-Path $PackageDir $name
+    if (!(Test-Path $path)) {
+        throw "Missing package file: $name"
+    }
+}
+
+$runtimeDir = Join-Path $PackageDir 'pjarczak_bambu_linux_host.runtime'
+if (!(Test-Path $runtimeDir)) {
+    throw 'Missing package directory: pjarczak_bambu_linux_host.runtime'
+}
+
+$wsl = Join-Path $env:WINDIR 'System32\wsl.exe'
+if (!(Test-Path $wsl)) {
     throw 'wsl.exe not found'
 }
 
-function Step([string]$Name, [scriptblock]$Block) {
-    Write-Host ('[' + $Name + ']')
-    $global:LASTEXITCODE = 0
-    & $Block
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Name failed with exit code $LASTEXITCODE"
+$distroList = & $wsl -l -q 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to query installed WSL distros'
+}
+if (-not ($distroList | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq $DistroName })) {
+    throw "WSL distro '$DistroName' is not installed"
+}
+
+$packageDirWsl = To-WslPath $PackageDir
+$pluginCacheDirWsl = ""
+if (-not [string]::IsNullOrWhiteSpace($PluginCacheDir)) {
+    $pluginCacheDirWsl = To-WslPath $PluginCacheDir
+}
+$bootstrapWsl = "$packageDirWsl/pjarczak_wsl_run_host.sh"
+
+$probe = & $wsl -d $DistroName --user root -- sh $bootstrapWsl --probe $packageDirWsl $pluginCacheDirWsl 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $probeText = ($probe | Out-String).Trim()
+    if ($AllowMissingLinuxPlugin -and $probeText -match 'plugin_not_downloaded') {
+        Write-Host 'WSL runtime package OK, linux plugin not downloaded yet.'
+        Write-Host $probeText
+        exit 0
     }
-    Write-Host ''
+    throw "WSL runtime probe failed: $probeText"
 }
 
-function Step-WslLddStrict([string]$Name, [string]$CommandText) {
-    Step $Name {
-        $output = & $WslExe --distribution $Distro --user root --exec /bin/sh -lc $CommandText 2>&1
-        $exitCode = $LASTEXITCODE
-        $text = ($output | Out-String)
-        $text = $text.TrimEnd()
-        if (-not [string]::IsNullOrWhiteSpace($text)) {
-            Write-Host $text
-        }
-        if ($exitCode -ne 0) {
-            throw "$Name failed with exit code $exitCode"
-        }
-        if ($text -match '(?m)\bnot found\b') {
-            throw "$Name reported missing shared libraries"
-        }
-    }
-}
-
-$WslExe = Find-WslExe
-
-Step 'env' {
-    Write-Host ('PJARCZAK_WSL_DISTRO=' + $env:PJARCZAK_WSL_DISTRO)
-    Write-Host ('PJARCZAK_WSL_USER=' + $env:PJARCZAK_WSL_USER)
-    Write-Host ('PJARCZAK_WSL_HOST_PATH=' + $env:PJARCZAK_WSL_HOST_PATH)
-    Write-Host ('PJARCZAK_WSL_RUNTIME_DIR=' + $env:PJARCZAK_WSL_RUNTIME_DIR)
-}
-
-Step 'wsl-status' {
-    & $WslExe --status
-}
-
-Step 'wsl-list' {
-    & $WslExe -l -v
-}
-
-Step 'host-check' {
-    & $WslExe --distribution $Distro --user root --exec /bin/sh -lc 'set -eu; test -x /opt/pjarczak/bin/pjarczak_bambu_linux_host; echo HOST_OK'
-}
-
-Step 'runtime-check' {
-    & $WslExe --distribution $Distro --user root --exec /bin/sh -lc 'set -eu; ls -la /opt/pjarczak/bin; ls -la /opt/pjarczak/runtime || true'
-}
-
-Step-WslLddStrict 'ldd' 'set -eu; LD_LIBRARY_PATH=/opt/pjarczak/runtime ldd /opt/pjarczak/bin/pjarczak_bambu_linux_host'
-
-Write-Host 'Verify finished.'
+Write-Host 'WSL runtime probe OK'
+Write-Host (($probe | Out-String).Trim())

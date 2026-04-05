@@ -9,13 +9,18 @@ set(PJARCZAK_LINUX_BRIDGE_COMMON_SOURCES
 
 get_filename_component(PJARCZAK_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
 set(PJARCZAK_LINUX_HOST_DIR "${PJARCZAK_REPO_ROOT}/tools/pjarczak_bambu_linux_host")
+set(PJARCZAK_LINUX_BRIDGE_INCLUDE_DIRS
+    ${PJARCZAK_REPO_ROOT}
+    ${PJARCZAK_REPO_ROOT}/src
+    ${PJARCZAK_REPO_ROOT}/deps_src
+)
 
 if (WIN32)
     add_library(pjarczak_bambu_networking_bridge SHARED
         ${PJARCZAK_LINUX_BRIDGE_COMMON_SOURCES}
         ${CMAKE_CURRENT_LIST_DIR}/PJarczakLinuxSoBridgeLauncher_win.cpp
     )
-    target_include_directories(pjarczak_bambu_networking_bridge PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../..)
+    target_include_directories(pjarczak_bambu_networking_bridge PRIVATE ${PJARCZAK_LINUX_BRIDGE_INCLUDE_DIRS})
     target_compile_definitions(pjarczak_bambu_networking_bridge PRIVATE PJARCZAK_LINUX_BRIDGE_LIGHTWEIGHT_TASKS=1)
     target_link_libraries(pjarczak_bambu_networking_bridge PRIVATE boost_headeronly boost_libs OpenSSL::Crypto)
 elseif (APPLE)
@@ -23,7 +28,7 @@ elseif (APPLE)
         ${PJARCZAK_LINUX_BRIDGE_COMMON_SOURCES}
         ${CMAKE_CURRENT_LIST_DIR}/PJarczakLinuxSoBridgeLauncher_mac.mm
     )
-    target_include_directories(pjarczak_bambu_networking_bridge PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../..)
+    target_include_directories(pjarczak_bambu_networking_bridge PRIVATE ${PJARCZAK_LINUX_BRIDGE_INCLUDE_DIRS})
     target_compile_definitions(pjarczak_bambu_networking_bridge PRIVATE PJARCZAK_LINUX_BRIDGE_LIGHTWEIGHT_TASKS=1)
     target_link_libraries(pjarczak_bambu_networking_bridge PRIVATE boost_headeronly boost_libs OpenSSL::Crypto)
 else()
@@ -31,7 +36,7 @@ else()
         ${PJARCZAK_LINUX_BRIDGE_COMMON_SOURCES}
         ${CMAKE_CURRENT_LIST_DIR}/PJarczakLinuxSoBridgeLauncher_linux.cpp
     )
-    target_include_directories(pjarczak_bambu_networking_bridge PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../..)
+    target_include_directories(pjarczak_bambu_networking_bridge PRIVATE ${PJARCZAK_LINUX_BRIDGE_INCLUDE_DIRS})
     target_link_libraries(pjarczak_bambu_networking_bridge PRIVATE boost_headeronly boost_libs OpenSSL::Crypto)
 endif()
 
@@ -52,10 +57,7 @@ if (UNIX AND NOT APPLE AND EXISTS "${PJARCZAK_LINUX_HOST_DIR}/main.cpp" AND EXIS
         ${CMAKE_CURRENT_LIST_DIR}/PJarczakLinuxBridgeConfig.cpp
         ${CMAKE_CURRENT_LIST_DIR}/PJarczakLinuxSoBridgeRpcProtocol.cpp
     )
-    target_include_directories(pjarczak_bambu_linux_host PRIVATE
-        ${PJARCZAK_REPO_ROOT}
-        ${PJARCZAK_REPO_ROOT}/src
-    )
+    target_include_directories(pjarczak_bambu_linux_host PRIVATE ${PJARCZAK_LINUX_BRIDGE_INCLUDE_DIRS})
     target_compile_definitions(pjarczak_bambu_linux_host PRIVATE
         PJARCZAK_LINUX_BRIDGE_STANDALONE_HOST=1
         PJARCZAK_LINUX_BRIDGE_LIGHTWEIGHT_TASKS=1
@@ -92,7 +94,9 @@ if (WIN32)
     set(PJARCZAK_WSL_INSTALLER_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/install_runtime.ps1)
     set(PJARCZAK_WSL_INSTALLER_CMD_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/install_runtime.cmd)
     set(PJARCZAK_WSL_VERIFY_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/verify_runtime.ps1)
+    set(PJARCZAK_WSL_DISTRO_FILE_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/pjarczak_wsl_distro.txt)
     set(PJARCZAK_RUNTIME_README_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/README_runtime_bridge.txt)
+    set(PJARCZAK_RUNTIME_ASSEMBLER_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/release/assemble_windows_runtime_bundle.ps1)
     add_custom_command(TARGET pjarczak_bambu_networking_bridge POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_WSL_HELPER_SOURCE}
@@ -107,15 +111,23 @@ if (WIN32)
             ${PJARCZAK_WSL_VERIFY_SOURCE}
             ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/verify_runtime.ps1
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_WSL_DISTRO_FILE_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pjarczak_wsl_distro.txt
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_RUNTIME_README_SOURCE}
             ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/README_runtime_bridge.txt
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PJARCZAK_RUNTIME_ASSEMBLER_SOURCE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assemble_windows_runtime_bundle.ps1
     )
     install(FILES
         ${PJARCZAK_WSL_HELPER_SOURCE}
         ${PJARCZAK_WSL_INSTALLER_SOURCE}
         ${PJARCZAK_WSL_INSTALLER_CMD_SOURCE}
         ${PJARCZAK_WSL_VERIFY_SOURCE}
+        ${PJARCZAK_WSL_DISTRO_FILE_SOURCE}
         ${PJARCZAK_RUNTIME_README_SOURCE}
+        ${PJARCZAK_RUNTIME_ASSEMBLER_SOURCE}
         DESTINATION "."
     )
 endif()

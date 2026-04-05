@@ -2,33 +2,60 @@ param(
     [Parameter(Mandatory = $true)][string]$OutputDir,
     [Parameter(Mandatory = $true)][string]$RootFs,
     [Parameter(Mandatory = $true)][string]$LinuxHostBinary,
-    [string]$RuntimeDir = ""
+    [string]$RuntimeDir = "",
+    [string]$BridgeDll = "",
+    [string]$DistroName = "OrcaSlicerRuntime"
 )
 
 $ErrorActionPreference = 'Stop'
 
-$scriptDir = Split-Path -Parent $PSCommandPath
+function Get-ScriptDir {
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        return $PSScriptRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        return (Split-Path -Parent $PSCommandPath)
+    }
+    if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+        return (Split-Path -Parent $MyInvocation.MyCommand.Path)
+    }
+    return (Get-Location).Path
+}
+
+$scriptDir = Get-ScriptDir
 $toolsRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir '..'))
 $wslRoot = Join-Path $toolsRoot 'wsl'
 
 if (-not (Test-Path $RootFs)) { throw "RootFs not found: $RootFs" }
 if (-not (Test-Path $LinuxHostBinary)) { throw "LinuxHostBinary not found: $LinuxHostBinary" }
 if ($RuntimeDir -and -not (Test-Path $RuntimeDir)) { throw "RuntimeDir not found: $RuntimeDir" }
+if ($BridgeDll -and -not (Test-Path $BridgeDll)) { throw "BridgeDll not found: $BridgeDll" }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir 'rootfs') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir 'linux-runtime') | Out-Null
 
 Copy-Item -Force (Join-Path $wslRoot 'install_runtime.ps1') (Join-Path $OutputDir 'install_runtime.ps1')
 Copy-Item -Force (Join-Path $wslRoot 'install_runtime.cmd') (Join-Path $OutputDir 'install_runtime.cmd')
 Copy-Item -Force (Join-Path $wslRoot 'verify_runtime.ps1') (Join-Path $OutputDir 'verify_runtime.ps1')
+Copy-Item -Force (Join-Path $wslRoot 'pjarczak_wsl_run_host.sh') (Join-Path $OutputDir 'pjarczak_wsl_run_host.sh')
+Copy-Item -Force (Join-Path $wslRoot 'pjarczak_wsl_distro.txt') (Join-Path $OutputDir 'pjarczak_wsl_distro.txt')
 Copy-Item -Force (Join-Path $toolsRoot 'README_runtime_bridge.txt') (Join-Path $OutputDir 'README_runtime_bridge.txt')
-Copy-Item -Force $RootFs (Join-Path $OutputDir 'rootfs\pjarczak-bambu-rootfs.tar')
-Copy-Item -Force $LinuxHostBinary (Join-Path $OutputDir 'linux-runtime\pjarczak_bambu_linux_host')
+
+Set-Content -Path (Join-Path $OutputDir 'pjarczak_wsl_distro.txt') -Value ($DistroName + [Environment]::NewLine) -NoNewline:$false
+
+Copy-Item -Force $RootFs (Join-Path $OutputDir 'windows-wsl2-rootfs.tar')
+Copy-Item -Force $LinuxHostBinary (Join-Path $OutputDir 'pjarczak_bambu_linux_host')
+
+if ($BridgeDll) {
+    Copy-Item -Force $BridgeDll (Join-Path $OutputDir 'pjarczak_bambu_networking_bridge.dll')
+}
 
 if ($RuntimeDir) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir 'linux-runtime\runtime') | Out-Null
-    Copy-Item -Recurse -Force (Join-Path $RuntimeDir '*') (Join-Path $OutputDir 'linux-runtime\runtime')
+    $destRuntime = Join-Path $OutputDir 'pjarczak_bambu_linux_host.runtime'
+    if (Test-Path $destRuntime) {
+        Remove-Item -Recurse -Force $destRuntime
+    }
+    New-Item -ItemType Directory -Force -Path $destRuntime | Out-Null
+    Copy-Item -Recurse -Force (Join-Path $RuntimeDir '*') $destRuntime
 }
 
 Write-Host 'Bundle created:'
