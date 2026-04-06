@@ -185,16 +185,12 @@ if exist "%WP%\tools\pjarczak_bambu_runtime\windows-wsl2-rootfs.tar" (
     goto :resolve_wsl_rootfs_done
 )
 
-echo windows-wsl2-rootfs.tar not found. Building it automatically with Docker...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%WP%\tools\pjarczak_bambu_runtime\rootfs\build_windows_wsl_rootfs.ps1" -OutputTar "%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar"
-if errorlevel 1 exit /b 1
-
-if not exist "%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar" (
-    echo Failed to create windows-wsl2-rootfs.tar
-    exit /b 1
-)
-
-set "ROOTFS_TAR_RESOLVED=%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar"
+echo Missing windows-wsl2-rootfs.tar.
+echo Provide one of:
+echo   %WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar
+echo   %WP%\tools\pjarczak_bambu_runtime\windows-wsl2-rootfs.tar
+echo or set PJARCZAK_WSL_ROOTFS_TAR to a valid tar file path.
+exit /b 1
 
 :resolve_wsl_rootfs_done
 exit /b 0
