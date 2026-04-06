@@ -14,23 +14,13 @@ if [ -z "$PACKAGE_DIR" ]; then
     exit 127
 fi
 
-PACKAGE_RUNTIME_DIR="$PACKAGE_DIR/pjarczak_bambu_linux_host.runtime"
-
-find_first_existing() {
-    for path in "$@"; do
-        if [ -n "$path" ] && [ -f "$path" ]; then
-            printf '%s\n' "$path"
-            return 0
-        fi
-    done
-    return 1
-}
-
-HOST_SRC="$(find_first_existing \
-    "$PACKAGE_DIR/pjarczak_bambu_linux_host" \
-    "$PACKAGE_RUNTIME_DIR/pjarczak_bambu_linux_host" || true)"
-if [ -z "$HOST_SRC" ]; then
-    echo "missing runtime file: pjarczak_bambu_linux_host" >&2
+RUNTIME_SUBDIR="$PACKAGE_DIR/pjarczak_bambu_linux_host.runtime"
+HOST_SRC="$PACKAGE_DIR/pjarczak_bambu_linux_host"
+if [ ! -f "$HOST_SRC" ] && [ -f "$RUNTIME_SUBDIR/pjarczak_bambu_linux_host" ]; then
+    HOST_SRC="$RUNTIME_SUBDIR/pjarczak_bambu_linux_host"
+fi
+if [ ! -f "$HOST_SRC" ]; then
+    echo "missing runtime file: $HOST_SRC" >&2
     exit 127
 fi
 
@@ -40,8 +30,8 @@ find_payload_file() {
         printf '%s\n' "$PACKAGE_DIR/$name"
         return 0
     fi
-    if [ -f "$PACKAGE_RUNTIME_DIR/$name" ]; then
-        printf '%s\n' "$PACKAGE_RUNTIME_DIR/$name"
+    if [ -f "$RUNTIME_SUBDIR/$name" ]; then
+        printf '%s\n' "$RUNTIME_SUBDIR/$name"
         return 0
     fi
     if [ -n "$PLUGIN_CACHE_DIR" ] && [ -f "$PLUGIN_CACHE_DIR/$name" ]; then
@@ -54,7 +44,12 @@ find_payload_file() {
 NETWORK_SRC="$(find_payload_file libbambu_networking.so || true)"
 SOURCE_SRC="$(find_payload_file libBambuSource.so || true)"
 LIVE555_SRC="$(find_payload_file liblive555.so || true)"
-MANIFEST_SRC="$(find_payload_file linux_payload_manifest.json || true)"
+MANIFEST_SRC=""
+if [ -f "$PACKAGE_DIR/linux_payload_manifest.json" ]; then
+    MANIFEST_SRC="$PACKAGE_DIR/linux_payload_manifest.json"
+elif [ -f "$RUNTIME_SUBDIR/linux_payload_manifest.json" ]; then
+    MANIFEST_SRC="$RUNTIME_SUBDIR/linux_payload_manifest.json"
+fi
 
 if [ -z "$NETWORK_SRC" ] || [ -z "$SOURCE_SRC" ]; then
     echo "plugin_not_downloaded package_dir=$PACKAGE_DIR plugin_cache_dir=${PLUGIN_CACHE_DIR:-none}" >&2
@@ -80,26 +75,6 @@ RUNTIME_HASH="$({
 TARGET_DIR="$RUNTIME_BASE/$RUNTIME_HASH"
 CURRENT_DIR="$RUNTIME_BASE/current"
 
-copy_payload_dir() {
-    local src_dir="$1"
-    local dst_dir="$2"
-    [ -d "$src_dir" ] || return 0
-
-    for path in "$src_dir"/*; do
-        [ -f "$path" ] || continue
-        base="$(basename "$path")"
-        case "$base" in
-            pjarczak_bambu_linux_host|libbambu_networking.so|libBambuSource.so|liblive555.so|linux_payload_manifest.json)
-                continue
-                ;;
-            *.dll|*.ps1|*.txt|*.tar|*.zip|*.cmd|*.bat|*.sh)
-                continue
-                ;;
-        esac
-        cp "$path" "$dst_dir/$base"
-    done
-}
-
 if [ ! -d "$TARGET_DIR" ]; then
     TMP_DIR="$RUNTIME_BASE/.tmp-$RUNTIME_HASH-$$"
     rm -rf "$TMP_DIR"
@@ -115,8 +90,32 @@ if [ ! -d "$TARGET_DIR" ]; then
         cp "$MANIFEST_SRC" "$TMP_DIR/linux_payload_manifest.json"
     fi
 
-    copy_payload_dir "$PACKAGE_RUNTIME_DIR" "$TMP_DIR"
-    copy_payload_dir "$PACKAGE_DIR" "$TMP_DIR"
+    for path in "$PACKAGE_DIR"/*; do
+        [ -f "$path" ] || continue
+        base="$(basename "$path")"
+        case "$base" in
+            pjarczak_bambu_linux_host|libbambu_networking.so|libBambuSource.so|liblive555.so|linux_payload_manifest.json)
+                continue
+                ;;
+            *.dll|*.ps1|*.txt|*.tar|*.zip|*.cmd|*.bat|*.sh)
+                continue
+                ;;
+        esac
+        cp "$path" "$TMP_DIR/$base"
+    done
+
+    if [ -d "$RUNTIME_SUBDIR" ]; then
+        for path in "$RUNTIME_SUBDIR"/*; do
+            [ -f "$path" ] || continue
+            base="$(basename "$path")"
+            case "$base" in
+                pjarczak_bambu_linux_host|libbambu_networking.so|libBambuSource.so|liblive555.so|linux_payload_manifest.json)
+                    continue
+                    ;;
+            esac
+            cp "$path" "$TMP_DIR/$base"
+        done
+    fi
 
     chmod 755 "$TMP_DIR/pjarczak_bambu_linux_host"
     mv "$TMP_DIR" "$TARGET_DIR"

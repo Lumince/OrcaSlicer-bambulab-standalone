@@ -4,16 +4,16 @@ param(
     [Parameter(Mandatory = $true)][string]$LinuxHostBinary,
     [string]$RuntimeDir = "",
     [string]$BridgeDll = "",
-    [string]$DistroName = "OrcaSlicerRuntime"
+    [string]$DistroName = "PJARCZAK-BAMBU"
 )
 
 $ErrorActionPreference = 'Stop'
 
 function Get-ScriptDir {
-    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    if ($PSScriptRoot) {
         return $PSScriptRoot
     }
-    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    if ($PSCommandPath) {
         return (Split-Path -Parent $PSCommandPath)
     }
     if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {

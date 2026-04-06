@@ -29,7 +29,7 @@ static std::string g_last_error;
 static int invalid_handle()
 {
     g_last_error = "invalid handle";
-    return BBL::BAMBU_NETWORK_ERR_INVALID_HANDLE;
+    return BAMBU_NETWORK_ERR_INVALID_HANDLE;
 }
 
 static BridgeAgent* require_agent(void* handle)

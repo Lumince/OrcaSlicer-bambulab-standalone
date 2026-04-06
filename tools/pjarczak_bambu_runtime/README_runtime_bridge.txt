@@ -1,22 +1,23 @@
 PJarczak Linux runtime bridge
 
-Windows:
-- The Windows package must contain:
-  - pjarczak_bambu_networking_bridge.dll
-  - install_runtime.ps1
-  - install_runtime.cmd
-  - verify_runtime.ps1
-  - pjarczak_wsl_run_host.sh
-  - pjarczak_wsl_distro.txt
-  - pjarczak_bambu_linux_host
-  - pjarczak_bambu_linux_host.runtime/
-  - windows-wsl2-rootfs.tar
-- Run install_runtime.cmd as Administrator to import the WSL runtime distro.
-- Run verify_runtime.ps1 after install to validate the runtime package.
-- The WSL helper will use linux payload files from:
-  - package root
-  - pjarczak_bambu_linux_host.runtime/
-  - plugin cache directory
+Windows package should contain at minimum:
+- pjarczak_bambu_networking_bridge.dll
+- pjarczak_bambu_linux_host
+- install_runtime.ps1
+- install_runtime.cmd
+- verify_runtime.ps1
+- pjarczak_wsl_run_host.sh
+- pjarczak_wsl_distro.txt
+- windows-wsl2-rootfs.tar
+
+Optional runtime payload directory:
+- pjarczak_bambu_linux_host.runtime/
+
+Optional plugin cache payloads looked up by the WSL helper:
+- libbambu_networking.so
+- libBambuSource.so
+- liblive555.so
+- linux_payload_manifest.json
 
 Linux:
 - Native Linux uses direct host execution and should not use the WSL helper flow.

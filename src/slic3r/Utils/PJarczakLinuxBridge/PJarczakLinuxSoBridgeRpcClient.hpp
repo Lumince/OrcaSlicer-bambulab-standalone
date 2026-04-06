@@ -33,7 +33,6 @@ private:
     struct Proc {
         boost::process::opstream in;
         boost::process::ipstream out;
-        boost::process::ipstream err;
         boost::process::child child;
     };
 
@@ -48,21 +47,15 @@ private:
     bool start_locked();
     void stop_locked();
     void reader_loop();
-    void stderr_reader_loop();
-    void append_stderr_line(const std::string& line);
-    std::string stderr_summary() const;
 
     mutable std::mutex m_state_mutex;
     std::mutex m_write_mutex;
-    std::mutex m_stderr_mutex;
     std::unique_ptr<Proc> m_proc;
     std::thread m_reader;
-    std::thread m_stderr_reader;
     int m_next_id{1};
     std::string m_last_error;
     std::map<int, std::shared_ptr<Pending>> m_pending;
     bool m_reader_stop{false};
-    std::string m_stderr_tail;
 };
 
 }

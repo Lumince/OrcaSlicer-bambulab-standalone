@@ -8,10 +8,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Get-ScriptDir {
-    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    if ($PSScriptRoot) {
         return $PSScriptRoot
     }
-    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    if ($PSCommandPath) {
         return (Split-Path -Parent $PSCommandPath)
     }
     if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
@@ -56,7 +56,7 @@ if ([string]::IsNullOrWhiteSpace($DistroName)) {
     }
 }
 if ([string]::IsNullOrWhiteSpace($DistroName)) {
-    $DistroName = 'OrcaSlicerRuntime'
+    $DistroName = 'PJARCZAK-BAMBU'
 }
 
 $requiredFiles = @(
@@ -65,7 +65,8 @@ $requiredFiles = @(
     'install_runtime.ps1',
     'verify_runtime.ps1',
     'pjarczak_wsl_run_host.sh',
-    'pjarczak_bambu_linux_host'
+    'pjarczak_bambu_linux_host',
+    'windows-wsl2-rootfs.tar'
 )
 
 foreach ($name in $requiredFiles) {
@@ -73,11 +74,6 @@ foreach ($name in $requiredFiles) {
     if (!(Test-Path $path)) {
         throw "Missing package file: $name"
     }
-}
-
-$runtimeDir = Join-Path $PackageDir 'pjarczak_bambu_linux_host.runtime'
-if (!(Test-Path $runtimeDir)) {
-    throw 'Missing package directory: pjarczak_bambu_linux_host.runtime'
 }
 
 $wsl = Join-Path $env:WINDIR 'System32\wsl.exe'
