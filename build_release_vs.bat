@@ -97,6 +97,9 @@ if "%debug%"=="ON" (
 )
 echo build type set to %build_type%
 
+call :resolve_wsl_rootfs
+if errorlevel 1 exit /b 1
+
 setlocal DISABLEDELAYEDEXPANSION
 cd deps
 mkdir %build_dir%
@@ -160,6 +163,42 @@ echo.
 echo Build completed in %_hours%h %_mins%m %_secs%s
 exit /b 0
 
+:resolve_wsl_rootfs
+set "ROOTFS_TAR_RESOLVED="
+if defined PJARCZAK_WSL_ROOTFS_TAR (
+    if exist "%PJARCZAK_WSL_ROOTFS_TAR%" (
+        set "ROOTFS_TAR_RESOLVED=%PJARCZAK_WSL_ROOTFS_TAR%"
+        goto :resolve_wsl_rootfs_done
+    )
+    echo PJARCZAK_WSL_ROOTFS_TAR is set but file does not exist:
+    echo   %PJARCZAK_WSL_ROOTFS_TAR%
+    exit /b 1
+)
+
+if exist "%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar" (
+    set "ROOTFS_TAR_RESOLVED=%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar"
+    goto :resolve_wsl_rootfs_done
+)
+
+if exist "%WP%\tools\pjarczak_bambu_runtime\windows-wsl2-rootfs.tar" (
+    set "ROOTFS_TAR_RESOLVED=%WP%\tools\pjarczak_bambu_runtime\windows-wsl2-rootfs.tar"
+    goto :resolve_wsl_rootfs_done
+)
+
+echo windows-wsl2-rootfs.tar not found. Building it automatically with Docker...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%WP%\tools\pjarczak_bambu_runtime\rootfs\build_windows_wsl_rootfs.ps1" -OutputTar "%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar"
+if errorlevel 1 exit /b 1
+
+if not exist "%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar" (
+    echo Failed to create windows-wsl2-rootfs.tar
+    exit /b 1
+)
+
+set "ROOTFS_TAR_RESOLVED=%WP%\tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar"
+
+:resolve_wsl_rootfs_done
+exit /b 0
+
 :copy_linux_bridge_runtime
 set "INSTALL_DIR=%WP%\%build_dir%\OrcaSlicer"
 set "HOST_RUNTIME_DIR=%WP%\tools\pjarczak_bambu_linux_host\runtime\linux-x86_64"
@@ -173,6 +212,11 @@ if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host" (
 
 if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host.runtime" (
     echo Missing linux host runtime directory: %HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host.runtime
+    exit /b 1
+)
+
+if not exist "%ROOTFS_TAR_RESOLVED%" (
+    echo Missing WSL rootfs tar: %ROOTFS_TAR_RESOLVED%
     exit /b 1
 )
 
@@ -204,11 +248,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
+copy /Y "%ROOTFS_TAR_RESOLVED%" "%INSTALL_DIR%\windows-wsl2-rootfs.tar" >nul
+if errorlevel 1 (
+    echo Failed to copy WSL rootfs tar into %INSTALL_DIR%
+    exit /b 1
+)
+
 if exist "%INSTALL_DIR%\pjarczak_bambu_linux_host.runtime" (
     rmdir /S /Q "%INSTALL_DIR%\pjarczak_bambu_linux_host.runtime"
 )
 
-xcopy "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host.runtime" "%INSTALL_DIR%\pjarczak_bambu_linux_host.runtime\" /E /I /Y >nul
+xcopy "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host.runtime" "%INSTALL_DIR%\pjarczak_bambu_linux_host.runtime\\" /E /I /Y >nul
 if errorlevel 4 (
     echo Failed to copy linux host runtime directory into %INSTALL_DIR%
     exit /b 1

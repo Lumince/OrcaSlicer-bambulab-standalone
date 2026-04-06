@@ -38,7 +38,6 @@ Copy-Item -Force (Join-Path $wslRoot 'install_runtime.cmd') (Join-Path $OutputDi
 Copy-Item -Force (Join-Path $wslRoot 'verify_runtime.ps1') (Join-Path $OutputDir 'verify_runtime.ps1')
 Copy-Item -Force (Join-Path $wslRoot 'pjarczak_wsl_run_host.sh') (Join-Path $OutputDir 'pjarczak_wsl_run_host.sh')
 Copy-Item -Force (Join-Path $wslRoot 'pjarczak_wsl_distro.txt') (Join-Path $OutputDir 'pjarczak_wsl_distro.txt')
-Copy-Item -Force (Join-Path $toolsRoot 'README_runtime_bridge.txt') (Join-Path $OutputDir 'README_runtime_bridge.txt')
 
 Set-Content -Path (Join-Path $OutputDir 'pjarczak_wsl_distro.txt') -Value ($DistroName + [Environment]::NewLine) -NoNewline:$false
 

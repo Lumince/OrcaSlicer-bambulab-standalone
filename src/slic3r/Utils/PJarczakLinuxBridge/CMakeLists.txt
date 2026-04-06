@@ -95,7 +95,6 @@ if (WIN32)
     set(PJARCZAK_WSL_INSTALLER_CMD_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/install_runtime.cmd)
     set(PJARCZAK_WSL_VERIFY_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/verify_runtime.ps1)
     set(PJARCZAK_WSL_DISTRO_FILE_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/wsl/pjarczak_wsl_distro.txt)
-    set(PJARCZAK_RUNTIME_README_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/README_runtime_bridge.txt)
     set(PJARCZAK_RUNTIME_ASSEMBLER_SOURCE ${CMAKE_SOURCE_DIR}/tools/pjarczak_bambu_runtime/release/assemble_windows_runtime_bundle.ps1)
     add_custom_command(TARGET pjarczak_bambu_networking_bridge POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -114,9 +113,6 @@ if (WIN32)
             ${PJARCZAK_WSL_DISTRO_FILE_SOURCE}
             $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/pjarczak_wsl_distro.txt
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${PJARCZAK_RUNTIME_README_SOURCE}
-            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/README_runtime_bridge.txt
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_RUNTIME_ASSEMBLER_SOURCE}
             $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/assemble_windows_runtime_bundle.ps1
     )
@@ -126,7 +122,6 @@ if (WIN32)
         ${PJARCZAK_WSL_INSTALLER_CMD_SOURCE}
         ${PJARCZAK_WSL_VERIFY_SOURCE}
         ${PJARCZAK_WSL_DISTRO_FILE_SOURCE}
-        ${PJARCZAK_RUNTIME_README_SOURCE}
         ${PJARCZAK_RUNTIME_ASSEMBLER_SOURCE}
         DESTINATION "."
     )
