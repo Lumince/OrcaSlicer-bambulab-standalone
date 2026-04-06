@@ -8,16 +8,27 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Get-ScriptDir {
-    if ($PSScriptRoot) {
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
         return $PSScriptRoot
     }
-    if ($PSCommandPath) {
+    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
         return (Split-Path -Parent $PSCommandPath)
     }
-    if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+    if ($MyInvocation.MyCommand -and -not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
         return (Split-Path -Parent $MyInvocation.MyCommand.Path)
     }
     return (Get-Location).Path
+}
+
+function Convert-FileToLf([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or !(Test-Path $Path)) {
+        return
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    $content = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $content, $utf8NoBom)
 }
 
 function To-WslPath([string]$Path) {
@@ -75,6 +86,9 @@ foreach ($name in $requiredFiles) {
         throw "Missing package file: $name"
     }
 }
+
+$bootstrapPath = Join-Path $PackageDir 'pjarczak_wsl_run_host.sh'
+Convert-FileToLf $bootstrapPath
 
 $wsl = Join-Path $env:WINDIR 'System32\wsl.exe'
 if (!(Test-Path $wsl)) {

@@ -41,22 +41,55 @@ find_payload_file() {
     return 1
 }
 
-NETWORK_SRC="$(find_payload_file libbambu_networking.so || true)"
-SOURCE_SRC="$(find_payload_file libBambuSource.so || true)"
-LIVE555_SRC="$(find_payload_file liblive555.so || true)"
-MANIFEST_SRC=""
-if [ -f "$PACKAGE_DIR/linux_payload_manifest.json" ]; then
-    MANIFEST_SRC="$PACKAGE_DIR/linux_payload_manifest.json"
-elif [ -f "$RUNTIME_SUBDIR/linux_payload_manifest.json" ]; then
-    MANIFEST_SRC="$RUNTIME_SUBDIR/linux_payload_manifest.json"
-fi
+resolve_payload_sources() {
+    NETWORK_SRC="$(find_payload_file libbambu_networking.so || true)"
+    SOURCE_SRC="$(find_payload_file libBambuSource.so || true)"
+    LIVE555_SRC="$(find_payload_file liblive555.so || true)"
+    MANIFEST_SRC=""
+    if [ -f "$PACKAGE_DIR/linux_payload_manifest.json" ]; then
+        MANIFEST_SRC="$PACKAGE_DIR/linux_payload_manifest.json"
+    elif [ -f "$RUNTIME_SUBDIR/linux_payload_manifest.json" ]; then
+        MANIFEST_SRC="$RUNTIME_SUBDIR/linux_payload_manifest.json"
+    elif [ -n "$PLUGIN_CACHE_DIR" ] && [ -f "$PLUGIN_CACHE_DIR/linux_payload_manifest.json" ]; then
+        MANIFEST_SRC="$PLUGIN_CACHE_DIR/linux_payload_manifest.json"
+    fi
+}
+
+wait_for_payload_sources() {
+    if [ "$MODE" = "probe" ]; then
+        return 1
+    fi
+
+    WAIT_SECS="${PJARCZAK_BAMBU_PLUGIN_WAIT_SECS:-300}"
+    SLEEP_SECS="${PJARCZAK_BAMBU_PLUGIN_WAIT_INTERVAL_SECS:-2}"
+    DEADLINE=$(( $(date +%s) + WAIT_SECS ))
+
+    while :; do
+        resolve_payload_sources
+        if [ -n "$NETWORK_SRC" ] && [ -n "$SOURCE_SRC" ]; then
+            return 0
+        fi
+
+        NOW=$(date +%s)
+        if [ "$NOW" -ge "$DEADLINE" ]; then
+            return 1
+        fi
+
+        sleep "$SLEEP_SECS"
+    done
+}
+
+resolve_payload_sources
 
 if [ -z "$NETWORK_SRC" ] || [ -z "$SOURCE_SRC" ]; then
     echo "plugin_not_downloaded package_dir=$PACKAGE_DIR plugin_cache_dir=${PLUGIN_CACHE_DIR:-none}" >&2
     if [ "$MODE" = "probe" ]; then
         exit 3
     fi
-    exit 127
+    if ! wait_for_payload_sources; then
+        echo "plugin_not_downloaded_timeout package_dir=$PACKAGE_DIR plugin_cache_dir=${PLUGIN_CACHE_DIR:-none}" >&2
+        exit 127
+    fi
 fi
 
 if ! command -v sha256sum >/dev/null 2>&1; then
@@ -67,11 +100,7 @@ fi
 RUNTIME_BASE="${PJARCZAK_BAMBU_WSL_RUNTIME_DIR:-/root/.pjarczak-bambu-runtime}"
 mkdir -p "$RUNTIME_BASE"
 
-RUNTIME_HASH="$({
-    sha256sum "$HOST_SRC" "$NETWORK_SRC" "$SOURCE_SRC"
-    [ -n "$LIVE555_SRC" ] && sha256sum "$LIVE555_SRC"
-    [ -n "$MANIFEST_SRC" ] && sha256sum "$MANIFEST_SRC"
-} | sha256sum | cut -d ' ' -f1)"
+RUNTIME_HASH="$({ sha256sum "$HOST_SRC" "$NETWORK_SRC" "$SOURCE_SRC"; [ -n "$LIVE555_SRC" ] && sha256sum "$LIVE555_SRC"; [ -n "$MANIFEST_SRC" ] && sha256sum "$MANIFEST_SRC"; } | sha256sum | cut -d ' ' -f1)"
 TARGET_DIR="$RUNTIME_BASE/$RUNTIME_HASH"
 CURRENT_DIR="$RUNTIME_BASE/current"
 
@@ -110,6 +139,9 @@ if [ ! -d "$TARGET_DIR" ]; then
             base="$(basename "$path")"
             case "$base" in
                 pjarczak_bambu_linux_host|libbambu_networking.so|libBambuSource.so|liblive555.so|linux_payload_manifest.json)
+                    continue
+                    ;;
+                *.dll|*.ps1|*.txt|*.tar|*.zip|*.cmd|*.bat|*.sh)
                     continue
                     ;;
             esac
