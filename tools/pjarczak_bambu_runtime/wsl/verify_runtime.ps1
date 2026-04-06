@@ -56,7 +56,7 @@ if ([string]::IsNullOrWhiteSpace($DistroName)) {
     }
 }
 if ([string]::IsNullOrWhiteSpace($DistroName)) {
-    $DistroName = 'PJARCZAK-BAMBU'
+    throw 'Missing distro name. Set PJARCZAK_WSL_DISTRO or provide pjarczak_wsl_distro.txt.'
 }
 
 $requiredFiles = @(

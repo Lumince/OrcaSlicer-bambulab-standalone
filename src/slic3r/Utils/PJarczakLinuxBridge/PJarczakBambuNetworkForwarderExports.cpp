@@ -15,6 +15,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#endif
 
 #if defined(_WIN32)
 #define PJBRIDGE_EXPORT extern "C" __declspec(dllexport)
@@ -523,3 +527,7 @@ PJBRIDGE_EXPORT int Bambu_Init() { return RpcClient::instance().invoke_int("src.
 PJBRIDGE_EXPORT void Bambu_Deinit() { RpcClient::instance().invoke_void("src.deinit"); }
 PJBRIDGE_EXPORT char const* Bambu_GetLastErrorMsg() { const auto j = RpcClient::instance().invoke_json("src.get_last_error_msg"); if (j.value("ok", false) && j.contains("message")) g_last_error = j.value("message", std::string()); return g_last_error.c_str(); }
 PJBRIDGE_EXPORT void Bambu_FreeLogMsg(tchar const* msg) { (void)msg; }
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif

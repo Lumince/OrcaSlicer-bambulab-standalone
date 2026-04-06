@@ -1,25 +1,128 @@
 #include "PJarczakLinuxSoBridgeLauncher.hpp"
-#include "PJarczakLinuxBridgeConfig.hpp"
+
+#include <windows.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 namespace Slic3r::PJarczakLinuxBridge {
 
 namespace {
 
-const char* env_value(const char* name)
+std::filesystem::path module_dir()
 {
-    return std::getenv(name);
+    HMODULE module = nullptr;
+    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(&build_default_launch_spec), &module))
+        return {};
+
+    std::wstring path(32768, L'\0');
+    const DWORD size = ::GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
+    if (size == 0)
+        return {};
+    path.resize(size);
+    return std::filesystem::path(path).parent_path();
 }
 
-std::string env_or(const char* name, const char* fallback)
+std::string narrow(const std::wstring& s)
 {
-    if (const char* v = env_value(name); v && *v)
-        return v;
-    return fallback;
+    if (s.empty())
+        return {};
+    const int size = ::WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(size, '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), out.data(), size, nullptr, nullptr);
+    return out;
+}
+
+std::string trim_ascii(std::string value)
+{
+    auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+    while (!value.empty() && is_space(static_cast<unsigned char>(value.front())))
+        value.erase(value.begin());
+    while (!value.empty() && is_space(static_cast<unsigned char>(value.back())))
+        value.pop_back();
+    return value;
+}
+
+std::string to_wsl_path(const std::filesystem::path& p)
+{
+    const std::wstring ws = p.wstring();
+    if (ws.size() >= 2 && ws[1] == L':') {
+        std::string tail = narrow(ws.substr(2));
+        std::replace(tail.begin(), tail.end(), '\\', '/');
+        if (!tail.empty() && tail.front() == '/')
+            tail.erase(tail.begin());
+        std::string out = "/mnt/";
+        out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ws[0]))));
+        out.push_back('/');
+        out += tail;
+        return out;
+    }
+
+    std::string out = narrow(ws);
+    std::replace(out.begin(), out.end(), '\\', '/');
+    return out;
+}
+
+std::string required_env(const char* name)
+{
+    const char* value = std::getenv(name);
+    return (value && *value) ? trim_ascii(std::string(value)) : std::string();
+}
+
+std::string read_text_file_trimmed(const std::filesystem::path& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return {};
+
+    std::string value((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (value.size() >= 3 &&
+        static_cast<unsigned char>(value[0]) == 0xEFu &&
+        static_cast<unsigned char>(value[1]) == 0xBBu &&
+        static_cast<unsigned char>(value[2]) == 0xBFu)
+        value.erase(0, 3);
+
+    return trim_ascii(value);
+}
+
+std::string configured_distro_name(const std::filesystem::path& plugin_dir)
+{
+    const auto env_value = required_env("PJARCZAK_WSL_DISTRO");
+    if (!env_value.empty())
+        return env_value;
+    const auto file_value = read_text_file_trimmed(plugin_dir / "pjarczak_wsl_distro.txt");
+    if (!file_value.empty())
+        return file_value;
+    return "PJARCZAK-BAMBU";
+}
+
+std::filesystem::path configured_plugin_cache_dir()
+{
+    const auto env_value = required_env("PJARCZAK_BAMBU_WINDOWS_PLUGIN_CACHE_DIR");
+    if (!env_value.empty())
+        return std::filesystem::path(env_value);
+
+    const auto appdata = required_env("APPDATA");
+    if (!appdata.empty())
+        return std::filesystem::path(appdata) / "OrcaSlicer" / "plugins";
+
+    return {};
+}
+
+std::string wsl_exe_path()
+{
+    std::wstring path(32768, L'\0');
+    const UINT size = ::GetSystemDirectoryW(path.data(), static_cast<UINT>(path.size()));
+    if (size == 0 || size >= path.size())
+        return "wsl.exe";
+    path.resize(size);
+    return narrow((std::filesystem::path(path) / L"wsl.exe").wstring());
 }
 
 std::string shell_quote(const std::string& value)
@@ -35,101 +138,7 @@ std::string shell_quote(const std::string& value)
     return out;
 }
 
-std::string to_wsl_path(std::string path)
-{
-    std::replace(path.begin(), path.end(), '\\', '/');
-    if (path.size() >= 2 && path[1] == ':') {
-        const char drive = static_cast<char>(std::tolower(static_cast<unsigned char>(path[0])));
-        return std::string("/mnt/") + drive + path.substr(2);
-    }
-    return path;
 }
-
-std::string host_path_in_distro()
-{
-    return env_or("PJARCZAK_WSL_HOST_PATH", "/opt/pjarczak/bin/pjarczak_bambu_linux_host");
-}
-
-std::string runtime_dir_in_distro()
-{
-    return env_or("PJARCZAK_WSL_RUNTIME_DIR", "/opt/pjarczak/runtime");
-}
-
-std::string wsl_distro_name()
-{
-    return env_or("PJARCZAK_WSL_DISTRO", "PJARCZAK-BAMBU");
-}
-
-std::string wsl_user_name()
-{
-    return env_or("PJARCZAK_WSL_USER", "root");
-}
-
-std::string wsl_shell_path()
-{
-    return env_or("PJARCZAK_WSL_SHELL", "/bin/sh");
-}
-
-void append_shell_export(std::string& script, const char* name, const std::string& value)
-{
-    if (value.empty())
-        return;
-    script += "export ";
-    script += name;
-    script += "=";
-    script += shell_quote(value);
-    script += ";";
-}
-
-void append_shell_path_export(std::string& script, const char* name)
-{
-    const char* value = env_value(name);
-    if (!value || !*value)
-        return;
-    append_shell_export(script, name, to_wsl_path(value));
-}
-
-std::string build_shell_prefix()
-{
-    std::string script = "set -eu;";
-
-    append_shell_path_export(script, "PJARCZAK_BAMBU_PLUGIN_DIR");
-    append_shell_path_export(script, "PJARCZAK_BAMBU_NETWORK_SO");
-    append_shell_path_export(script, "PJARCZAK_BAMBU_SOURCE_SO");
-    append_shell_path_export(script, "PJARCZAK_BAMBU_LIVE555_SO");
-
-    if (const char* version = env_value("PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION"); version && *version)
-        append_shell_export(script, "PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION", version);
-
-    script += "RUNTIME_DIR=";
-    script += shell_quote(runtime_dir_in_distro());
-    script += ";";
-    script += "HOST=";
-    script += shell_quote(host_path_in_distro());
-    script += ";";
-    script += "PLUGIN_DIR=${PJARCZAK_BAMBU_PLUGIN_DIR:-};";
-    script += "if [ -z \"${PJARCZAK_BAMBU_NETWORK_SO:-}\" ] && [ -n \"$PLUGIN_DIR\" ]; then export PJARCZAK_BAMBU_NETWORK_SO=\"$PLUGIN_DIR/libbambu_networking.so\"; fi;";
-    script += "if [ -z \"${PJARCZAK_BAMBU_SOURCE_SO:-}\" ] && [ -n \"$PLUGIN_DIR\" ]; then export PJARCZAK_BAMBU_SOURCE_SO=\"$PLUGIN_DIR/libBambuSource.so\"; fi;";
-    script += "if [ -z \"${PJARCZAK_BAMBU_LIVE555_SO:-}\" ] && [ -n \"$PLUGIN_DIR\" ]; then export PJARCZAK_BAMBU_LIVE555_SO=\"$PLUGIN_DIR/liblive555.so\"; fi;";
-    script += "LIB_DIR=\"$RUNTIME_DIR\";";
-    script += "if [ -n \"${PJARCZAK_BAMBU_NETWORK_SO:-}\" ]; then LIB_DIR=$(dirname \"$PJARCZAK_BAMBU_NETWORK_SO\"); fi;";
-    script += "export LD_LIBRARY_PATH=\"$LIB_DIR:$RUNTIME_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\";";
-    script += "[ -x \"$HOST\" ] || chmod +x \"$HOST\" || true;";
-    script += "[ -x \"$HOST\" ] || { echo \"missing linux host: $HOST\" 1>&2; exit 127; };";
-    script += "if [ -n \"${PJARCZAK_BAMBU_NETWORK_SO:-}\" ] && [ ! -f \"$PJARCZAK_BAMBU_NETWORK_SO\" ]; then echo \"missing libbambu_networking.so: $PJARCZAK_BAMBU_NETWORK_SO\" 1>&2; exit 127; fi;";
-    script += "if [ -n \"${PJARCZAK_BAMBU_SOURCE_SO:-}\" ] && [ ! -f \"$PJARCZAK_BAMBU_SOURCE_SO\" ]; then echo \"missing libBambuSource.so: $PJARCZAK_BAMBU_SOURCE_SO\" 1>&2; exit 127; fi;";
-    script += "if [ -n \"${PJARCZAK_BAMBU_LIVE555_SO:-}\" ] && [ ! -f \"$PJARCZAK_BAMBU_LIVE555_SO\" ]; then echo \"missing liblive555.so: $PJARCZAK_BAMBU_LIVE555_SO\" 1>&2; exit 127; fi;";
-    return script;
-}
-
-std::string build_default_shell_script()
-{
-    std::string script = build_shell_prefix();
-    script += "exec \"$HOST\";";
-    return script;
-}
-
-} // namespace
 
 std::string host_executable_name()
 {
@@ -143,31 +152,36 @@ std::string host_pipe_hint()
 
 LaunchSpec build_default_launch_spec()
 {
-    LaunchSpec spec;
+    const std::filesystem::path plugin_dir = module_dir();
+    const std::string distro = configured_distro_name(plugin_dir);
+    const auto plugin_cache_dir = configured_plugin_cache_dir();
+    const std::string plugin_dir_wsl = to_wsl_path(plugin_dir);
+    const std::string plugin_cache_wsl = plugin_cache_dir.empty() ? std::string() : to_wsl_path(plugin_cache_dir);
+    const std::string bootstrap_wsl = to_wsl_path(plugin_dir / "pjarczak_wsl_run_host.sh");
 
-    if (const char* cmd = env_value("PJARCZAK_LINUX_HOST_CMD"); cmd && *cmd) {
+    if (const char* cmd = std::getenv("PJARCZAK_LINUX_HOST_CMD"); cmd && *cmd) {
+        LaunchSpec spec;
         spec.description = "windows via PJARCZAK_LINUX_HOST_CMD";
-        std::string script = build_shell_prefix();
-        script += cmd;
         spec.argv = {
-            "wsl.exe",
-            "--distribution", wsl_distro_name(),
-            "--user", wsl_user_name(),
-            "--exec", wsl_shell_path(),
-            "-lc", script
+            wsl_exe_path(),
+            "-d", distro,
+            "--user", "root",
+            "--cd", "/",
+            "sh", "-lc", cmd
         };
         return spec;
     }
 
-    spec.description = "windows via WSL distro=" + wsl_distro_name() + " user=" + wsl_user_name();
+    LaunchSpec spec;
+    spec.description = "windows via explicit WSL2 distro with linux-local runtime bootstrap";
     spec.argv = {
-        "wsl.exe",
-        "--distribution", wsl_distro_name(),
-        "--user", wsl_user_name(),
-        "--exec", wsl_shell_path(),
-        "-lc", build_default_shell_script()
+        wsl_exe_path(),
+        "-d", distro,
+        "--user", "root",
+        "--cd", "/",
+        "sh", bootstrap_wsl, plugin_dir_wsl, plugin_cache_wsl
     };
     return spec;
 }
 
-} // namespace Slic3r::PJarczakLinuxBridge
+}

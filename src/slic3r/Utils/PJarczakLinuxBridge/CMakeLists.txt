@@ -81,7 +81,7 @@ if (APPLE)
     add_custom_command(TARGET pjarczak_bambu_networking_bridge POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_MAC_WRAPPER_SCRIPT_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pjarczak_bambu_macos_linux_wrapper.sh
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/pjarczak_bambu_macos_linux_wrapper.sh
     )
     install(FILES ${PJARCZAK_MAC_WRAPPER_SCRIPT_SOURCE}
         DESTINATION "."
@@ -100,25 +100,25 @@ if (WIN32)
     add_custom_command(TARGET pjarczak_bambu_networking_bridge POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_WSL_HELPER_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pjarczak_wsl_run_host.sh
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/pjarczak_wsl_run_host.sh
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_WSL_INSTALLER_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/install_runtime.ps1
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/install_runtime.ps1
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_WSL_INSTALLER_CMD_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/install_runtime.cmd
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/install_runtime.cmd
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_WSL_VERIFY_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/verify_runtime.ps1
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/verify_runtime.ps1
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_WSL_DISTRO_FILE_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pjarczak_wsl_distro.txt
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/pjarczak_wsl_distro.txt
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_RUNTIME_README_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/README_runtime_bridge.txt
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/README_runtime_bridge.txt
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PJARCZAK_RUNTIME_ASSEMBLER_SOURCE}
-            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assemble_windows_runtime_bundle.ps1
+            $<TARGET_FILE_DIR:pjarczak_bambu_networking_bridge>/assemble_windows_runtime_bundle.ps1
     )
     install(FILES
         ${PJARCZAK_WSL_HELPER_SOURCE}
