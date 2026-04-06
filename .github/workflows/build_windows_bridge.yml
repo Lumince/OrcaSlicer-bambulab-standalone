@@ -31,16 +31,7 @@ jobs:
       - name: Configure linux bridge host build
         shell: bash
         run: |
-          cmake -S . -B build \
-            -DCMAKE_C_COMPILER=/usr/bin/clang \
-            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
-            -DCMAKE_LINKER=/usr/bin/ld.lld \
-            -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
-            -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld \
-            -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld \
-            -G "Ninja Multi-Config" \
-            -DSLIC3R_PCH=ON \
-            -DORCA_TOOLS=ON
+          cmake -S . -B build -G "Ninja Multi-Config" -DORCA_TOOLS=ON
 
       - name: Build linux host runtime and WSL rootfs
         shell: bash
@@ -85,6 +76,7 @@ jobs:
           useCloudCache: true
 
       - name: Get the version and date on Windows
+        shell: pwsh
         run: |
           $date = Get-Date -Format 'yyyyMMdd'
           $eventName = "${{ github.event_name }}"
@@ -102,7 +94,6 @@ jobs:
 
           echo "ver=$ver" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
           echo "date=$date" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-        shell: pwsh
 
       - name: Download linux host runtime artifact
         uses: actions/download-artifact@v8
@@ -134,18 +125,29 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Install nsis
+        shell: pwsh
         run: |
           choco install nsis -y
+
+      - name: Build Windows deps
+        working-directory: ${{ github.workspace }}
+        env:
+          WindowsSdkDir: 'C:\Program Files (x86)\Windows Kits\10\'
+          WindowsSDKVersion: '10.0.26100.0\'
+        shell: pwsh
+        run: .\build_release_vs.bat deps
 
       - name: Build slicer Win
         working-directory: ${{ github.workspace }}
         env:
           WindowsSdkDir: 'C:\Program Files (x86)\Windows Kits\10\'
           WindowsSDKVersion: '10.0.26100.0\'
+        shell: pwsh
         run: .\build_release_vs.bat slicer
 
       - name: Create installer Win
         working-directory: ${{ github.workspace }}/build
+        shell: pwsh
         run: |
           cpack -G NSIS
 
