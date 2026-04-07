@@ -1,7 +1,6 @@
 #include "wxMediaCtrl2.h"
 #include "libslic3r/Time.hpp"
 #include "I18N.hpp"
-#include "slic3r/Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp"
 #include "GUI_App.hpp"
 #include <boost/filesystem/operations.hpp>
 #ifdef __WIN32__
@@ -9,6 +8,7 @@
 #include <versionhelpers.h>
 #include <wx/msw/registry.h>
 #include <shellapi.h>
+#include "slic3r/Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp"
 #endif
 
 #ifdef __LINUX__
@@ -93,9 +93,9 @@ void wxMediaCtrl2::Load(wxURI url)
         boost::filesystem::path data_dir_path(data_dir_str);
         auto                    dll_path = data_dir_path / "plugins" / "BambuSource.dll";
         if (Slic3r::PJarczakLinuxBridge::enabled()) {
-            auto fallback_path = data_dir_path / "cameratools" / "BambuSource.dll";
-            if (boost::filesystem::exists(fallback_path))
-                dll_path = fallback_path;
+            auto camera_dll_path = data_dir_path / "cameratools" / "BambuSource.dll";
+            if (boost::filesystem::exists(camera_dll_path))
+                dll_path = camera_dll_path;
         }
         if (path.empty() || !wxFile::Exists(path) || clsid != CLSID_BAMBU_SOURCE) {
             if (boost::filesystem::exists(dll_path)) {

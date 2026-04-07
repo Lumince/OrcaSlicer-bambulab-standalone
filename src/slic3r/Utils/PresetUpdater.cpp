@@ -38,8 +38,8 @@
 #include "slic3r/Config/Snapshot.hpp"
 #include "slic3r/GUI/MarkdownTip.hpp"
 #include "libslic3r/miniz_extension.hpp"
-#include "slic3r/Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp"
 #include "slic3r/GUI/GUI_Utils.hpp"
+#include "slic3r/Utils/PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp"
 
 namespace fs = boost::filesystem;
 using Slic3r::GUI::Config::Index;
@@ -796,58 +796,76 @@ void PresetUpdater::priv::sync_tooltip(std::string http_url, std::string languag
 // return true means there are plugins files
 bool PresetUpdater::priv::get_cached_plugins_version(std::string& cached_version, bool &force)
 {
-    const bool bridge_payload = Slic3r::PJarczakLinuxBridge::should_force_linux_plugin_payload("plugins");
-    auto cache_folder = bridge_payload ? cache_path : (cache_path / "plugins");
+    std::string data_dir_str = data_dir();
+    boost::filesystem::path data_dir_path(data_dir_str);
+    auto cache_folder = data_dir_path / "ota";
     bool has_plugins = false;
 
-    if (bridge_payload) {
-        const auto network_library = cache_folder / Slic3r::PJarczakLinuxBridge::linux_network_library_name();
-        const auto player_library  = cache_folder / Slic3r::PJarczakLinuxBridge::linux_source_library_name();
-        const auto live555_library = cache_folder / Slic3r::PJarczakLinuxBridge::linux_live555_library_name();
-        const auto agora_library   = cache_folder / "libagora_rtc_sdk.so";
-        const auto fdkaac_library  = cache_folder / "libagora-fdkaac.so";
-        const auto changelog_file  = cache_path / "network_plugins.json";
+    const bool pj_bridge = Slic3r::PJarczakLinuxBridge::enabled();
 
-        if (fs::exists(network_library)
-            && fs::exists(player_library)
-            && fs::exists(live555_library)
-            && fs::exists(agora_library)
-            && fs::exists(fdkaac_library)
-            && fs::exists(changelog_file))
-        {
-            has_plugins = true;
-            std::string description;
-            parse_ota_files(changelog_file.string(), cached_version, force, description);
-        }
-
-        return has_plugins;
+    std::vector<boost::filesystem::path> required_files;
+    if (pj_bridge) {
+        required_files = {
+            cache_folder / Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+            cache_folder / Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
+            cache_folder / Slic3r::PJarczakLinuxBridge::linux_live555_library_name(),
+            cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_rtc_sdk_library_name(),
+            cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_fdkaac_library_name(),
+            cache_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
+            cache_folder / "network_plugins.json"
+        };
+    } else {
+#if defined(_MSC_VER) || defined(_WIN32)
+        required_files = {
+            cache_folder / "bambu_networking.dll",
+            cache_folder / "BambuSource.dll",
+            cache_folder / "live555.dll",
+            cache_folder / "network_plugins.json"
+        };
+#elif defined(__WXMAC__)
+        required_files = {
+            cache_folder / "libbambu_networking.dylib",
+            cache_folder / "libBambuSource.dylib",
+            cache_folder / "liblive555.dylib",
+            cache_folder / "network_plugins.json"
+        };
+#else
+        required_files = {
+            cache_folder / "libbambu_networking.so",
+            cache_folder / "libBambuSource.so",
+            cache_folder / "liblive555.so",
+            cache_folder / "network_plugins.json"
+        };
+#endif
     }
 
-    std::string network_library, player_library, live555_library;
+    bool all_present = true;
+    for (const auto& path : required_files) {
+        if (!boost::filesystem::exists(path)) {
+            all_present = false;
+            break;
+        }
+    }
 
-#if defined(_MSC_VER) || defined(_WIN32)
-    network_library = cache_folder.string() + "/bambu_networking.dll";
-    player_library  = cache_folder.string() + "/BambuSource.dll";
-    live555_library = cache_folder.string() + "/live555.dll";
-#elif defined(__WXMAC__)
-    network_library = cache_folder.string() + "/libbambu_networking.dylib";
-    player_library  = cache_folder.string() + "/libBambuSource.dylib";
-    live555_library = cache_folder.string() + "/liblive555.dylib";
-#else
-    network_library = cache_folder.string() + "/libbambu_networking.so";
-    player_library  = cache_folder.string() + "/libBambuSource.so";
-    live555_library = cache_folder.string() + "/liblive555.so";
-#endif
-
-    std::string changelog_file = cache_folder.string() + "/network_plugins.json";
-    if (fs::exists(network_library)
-        && fs::exists(player_library)
-        && fs::exists(live555_library)
-        && fs::exists(changelog_file))
+    const auto changelog_file = cache_folder / "network_plugins.json";
+    if (all_present)
     {
         has_plugins = true;
-        std::string description;
-        parse_ota_files(changelog_file, cached_version, force, description);
+        try {
+            boost::nowide::ifstream ifs(changelog_file.string());
+            json j;
+            ifs >> j;
+
+            if (j.contains("version"))
+                cached_version = j["version"];
+            if (j.contains("force"))
+                force = j["force"];
+
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< ": cached_version = "<<cached_version<<", force = " << force;
+        }
+        catch(nlohmann::detail::parse_error &err) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__<< ": parse "<<changelog_file.string()<<" got a nlohmann::detail::parse_error, reason = " << err.what();
+        }
     }
 
     return has_plugins;
@@ -861,7 +879,6 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
     }
     std::string curr_version = NetworkAgent::use_legacy_network ? BAMBU_NETWORK_AGENT_VERSION_LEGACY : get_latest_network_version();
     std::string using_version = curr_version.substr(0, 9) + "00";
-    const bool bridge_payload = Slic3r::PJarczakLinuxBridge::should_force_linux_plugin_payload("plugins");
 
     std::string cached_version;
     bool force_upgrade = false;
@@ -896,70 +913,46 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
             boost::filesystem::path data_dir_path(data_dir_str);
             auto cache_folder = data_dir_path / "ota";
 
-            auto remove_cache_file = [](const boost::filesystem::path& file_path) {
-                if (!boost::filesystem::exists(file_path))
-                    return;
-                BOOST_LOG_TRIVIAL(info) << "[remove_old_networking_plugins] remove the file " << file_path.string();
-                try {
-                    fs::remove(file_path);
-                } catch (...) {
-                    BOOST_LOG_TRIVIAL(error) << "Failed  removing the plugins file " << file_path.string();
-                }
-            };
-
-            if (bridge_payload) {
-                if (!boost::filesystem::exists(cache_folder))
-                    return;
-                for (boost::filesystem::directory_iterator it(cache_folder); it != boost::filesystem::directory_iterator(); ++it) {
-                    if (!boost::filesystem::is_regular_file(it->status()))
-                        continue;
-                    const std::string file_name = it->path().filename().string();
-                    if (file_name == "network_plugins.json" ||
-                        file_name == Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name() ||
-                        Slic3r::PJarczakLinuxBridge::is_linux_payload_filename(file_name))
-                        remove_cache_file(it->path());
-                }
+            std::vector<boost::filesystem::path> cache_files;
+            if (Slic3r::PJarczakLinuxBridge::enabled()) {
+                cache_files = {
+                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
+                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_live555_library_name(),
+                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_rtc_sdk_library_name(),
+                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_fdkaac_library_name(),
+                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
+                    cache_folder / "network_plugins.json"
+                };
             } else {
 #if defined(_MSC_VER) || defined(_WIN32)
-                auto network_library = cache_folder / "bambu_networking.dll";
-                auto player_library  = cache_folder / "BambuSource.dll";
-                auto live555_library = cache_folder / "live555.dll";
+                cache_files = {cache_folder / "bambu_networking.dll", cache_folder / "BambuSource.dll", cache_folder / "live555.dll", cache_folder / "network_plugins.json"};
 #elif defined(__WXMAC__)
-                auto network_library = cache_folder / "libbambu_networking.dylib";
-                auto player_library  = cache_folder / "libBambuSource.dylib";
-                auto live555_library = cache_folder / "liblive555.dylib";
+                cache_files = {cache_folder / "libbambu_networking.dylib", cache_folder / "libBambuSource.dylib", cache_folder / "liblive555.dylib", cache_folder / "network_plugins.json"};
 #else
-                auto network_library = cache_folder / "libbambu_networking.so";
-                auto player_library  = cache_folder / "libBambuSource.so";
-                auto live555_library = cache_folder / "liblive555.so";
+                cache_files = {cache_folder / "libbambu_networking.so", cache_folder / "libBambuSource.so", cache_folder / "liblive555.so", cache_folder / "network_plugins.json"};
 #endif
-                auto changelog_file = cache_folder / "network_plugins.json";
-                remove_cache_file(network_library);
-                remove_cache_file(player_library);
-                remove_cache_file(live555_library);
-                remove_cache_file(changelog_file);
+            }
+
+            for (const auto& cache_file : cache_files) {
+                if (!boost::filesystem::exists(cache_file))
+                    continue;
+                BOOST_LOG_TRIVIAL(info) << "[remove_old_networking_plugins] remove the file " << cache_file.string();
+                try {
+                    fs::remove(cache_file);
+                } catch (...) {
+                    BOOST_LOG_TRIVIAL(error) << "Failed removing the plugins file " << cache_file.string();
+                }
             }
         }
     }
 
-    std::map<std::string, std::string> previous_headers = Slic3r::Http::get_extra_headers();
-    bool restore_os_type = false;
-    std::string previous_os_type;
-    auto os_type_it = previous_headers.find("X-BBL-OS-Type");
-    if (os_type_it != previous_headers.end()) {
-        restore_os_type = true;
-        previous_os_type = os_type_it->second;
-    }
-
 #if defined(__WINDOWS__)
-    if (bridge_payload) {
-        auto current_headers = previous_headers;
-        current_headers["X-BBL-OS-Type"] = Slic3r::PJarczakLinuxBridge::forced_download_os_type();
-        Slic3r::Http::set_extra_headers(current_headers);
-        BOOST_LOG_TRIVIAL(info) << boost::format("set X-BBL-OS-Type to %1%") % Slic3r::PJarczakLinuxBridge::forced_download_os_type();
-    } else if (GUI::wxGetApp().is_running_on_arm64() && !NetworkAgent::use_legacy_network) {
-        auto current_headers = previous_headers;
+    if (GUI::wxGetApp().is_running_on_arm64() && !NetworkAgent::use_legacy_network) {
+        //set to arm64 for plugins
+        std::map<std::string, std::string> current_headers = Slic3r::Http::get_extra_headers();
         current_headers["X-BBL-OS-Type"] = "windows_arm";
+
         Slic3r::Http::set_extra_headers(current_headers);
         BOOST_LOG_TRIVIAL(info) << boost::format("set X-BBL-OS-Type to windows_arm");
     }
@@ -975,16 +968,9 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
         BOOST_LOG_TRIVIAL(warning) << format("[Orca Updater] sync_plugins: %1%", e.what());
     }
 #if defined(__WINDOWS__)
-    if (bridge_payload) {
-        auto current_headers = Slic3r::Http::get_extra_headers();
-        if (restore_os_type)
-            current_headers["X-BBL-OS-Type"] = previous_os_type;
-        else
-            current_headers.erase("X-BBL-OS-Type");
-        Slic3r::Http::set_extra_headers(current_headers);
-        BOOST_LOG_TRIVIAL(info) << boost::format("restore X-BBL-OS-Type after linux bridge plugin sync");
-    } else if (GUI::wxGetApp().is_running_on_arm64() && !NetworkAgent::use_legacy_network) {
-        auto current_headers = Slic3r::Http::get_extra_headers();
+    if (GUI::wxGetApp().is_running_on_arm64() && !NetworkAgent::use_legacy_network) {
+        //set back
+        std::map<std::string, std::string> current_headers = Slic3r::Http::get_extra_headers();
         current_headers["X-BBL-OS-Type"] = "windows";
 
         Slic3r::Http::set_extra_headers(current_headers);
