@@ -602,6 +602,120 @@ nlohmann::json LinuxPluginHost::handle(const std::string& method, const nlohmann
     if (method == "net.get_bambulab_host") { auto f = net<std::string (*)(void*)>("bambu_network_get_bambulab_host"); auto a = lookup_agent(); return f && a ? nlohmann::json{{"ok", true}, {"value", f(a)}} : not_supported(method); }
     if (method == "net.get_user_selected_machine") { auto f = net<std::string (*)(void*)>("bambu_network_get_user_selected_machine"); auto a = lookup_agent(); return f && a ? nlohmann::json{{"ok", true}, {"value", f(a)}} : not_supported(method); }
     if (method == "net.set_user_selected_machine") { auto f = net<int (*)(void*, std::string)>("bambu_network_set_user_selected_machine"); auto a = lookup_agent(); return f && a ? nlohmann::json{{"ok", true}, {"value", f(a, payload.value("dev_id", std::string()))}} : not_supported(method); }
+    if (method == "net.start_print") {
+        auto f = net<int (*)(void*, BBL::PrintParams, OnUpdateStatusFn, WasCancelledFn, OnWaitFn)>("bambu_network_start_print");
+        auto a = lookup_agent();
+        if (!f || !a) return not_supported(method);
+        const auto job_id = payload.value("client_job_id", 0LL);
+        const auto params_json = payload.value("params", nlohmann::json::object());
+        auto job = std::make_shared<HostJobState>();
+        job->job_id = job_id;
+        job->agent_handle = agent_id;
+        job->kind = "start_print";
+        register_job(job);
+        const int ret = f(a, print_params_from_json(params_json),
+            [this, job](int status, int code, std::string msg) {
+                queue_event(job->agent_handle, "job.update_status", {{"job_id", job->job_id}, {"kind", job->kind}, {"status", status}, {"code", code}, {"msg", msg}});
+            },
+            [job]() {
+                return job->cancel_requested.load();
+            },
+            [this, job](int status, std::string job_info) {
+                queue_event(job->agent_handle, "job.wait", {{"job_id", job->job_id}, {"kind", job->kind}, {"status", status}, {"job_info", job_info}});
+                return !job->cancel_requested.load();
+            });
+        unregister_job(job_id);
+        return {{"ok", true}, {"value", ret}, {"job_id", job_id}};
+    }
+    if (method == "net.start_local_print_with_record") {
+        auto f = net<int (*)(void*, BBL::PrintParams, OnUpdateStatusFn, WasCancelledFn, OnWaitFn)>("bambu_network_start_local_print_with_record");
+        auto a = lookup_agent();
+        if (!f || !a) return not_supported(method);
+        const auto job_id = payload.value("client_job_id", 0LL);
+        const auto params_json = payload.value("params", nlohmann::json::object());
+        auto job = std::make_shared<HostJobState>();
+        job->job_id = job_id;
+        job->agent_handle = agent_id;
+        job->kind = "start_local_print_with_record";
+        register_job(job);
+        const int ret = f(a, print_params_from_json(params_json),
+            [this, job](int status, int code, std::string msg) {
+                queue_event(job->agent_handle, "job.update_status", {{"job_id", job->job_id}, {"kind", job->kind}, {"status", status}, {"code", code}, {"msg", msg}});
+            },
+            [job]() {
+                return job->cancel_requested.load();
+            },
+            [this, job](int status, std::string job_info) {
+                queue_event(job->agent_handle, "job.wait", {{"job_id", job->job_id}, {"kind", job->kind}, {"status", status}, {"job_info", job_info}});
+                return !job->cancel_requested.load();
+            });
+        unregister_job(job_id);
+        return {{"ok", true}, {"value", ret}, {"job_id", job_id}};
+    }
+    if (method == "net.start_local_print") {
+        auto f = net<int (*)(void*, BBL::PrintParams, OnUpdateStatusFn, WasCancelledFn)>("bambu_network_start_local_print");
+        auto a = lookup_agent();
+        if (!f || !a) return not_supported(method);
+        const auto job_id = payload.value("client_job_id", 0LL);
+        const auto params_json = payload.value("params", nlohmann::json::object());
+        auto job = std::make_shared<HostJobState>();
+        job->job_id = job_id;
+        job->agent_handle = agent_id;
+        job->kind = "start_local_print";
+        register_job(job);
+        const int ret = f(a, print_params_from_json(params_json),
+            [this, job](int status, int code, std::string msg) {
+                queue_event(job->agent_handle, "job.update_status", {{"job_id", job->job_id}, {"kind", job->kind}, {"status", status}, {"code", code}, {"msg", msg}});
+            },
+            [job]() {
+                return job->cancel_requested.load();
+            });
+        unregister_job(job_id);
+        return {{"ok", true}, {"value", ret}, {"job_id", job_id}};
+    }
+    if (method == "net.start_send_gcode_to_sdcard") {
+        auto f = net<int (*)(void*, BBL::PrintParams, OnUpdateStatusFn, WasCancelledFn, OnWaitFn)>("bambu_network_start_send_gcode_to_sdcard");
+        auto a = lookup_agent();
+        if (!f || !a) return not_supported(method);
+        const auto job_id = payload.value("client_job_id", 0LL);
+        const auto params_json = payload.value("params", nlohmann::json::object());
+        auto job = std::make_shared<HostJobState>();
+        job->job_id = job_id;
+        job->agent_handle = agent_id;
+        job->kind = "start_send_gcode_to_sdcard";
+        register_job(job);
+        const int ret = f(a, print_params_from_json(params_json),
+            [this, job](int status, int code, std::string msg) {
+                queue_event(job->agent_handle, "job.update_status", {{"job_id", job->job_id}, {"kind", job->kind}, {"status", status}, {"code", code}, {"msg", msg}});
+            },
+            [job]() {
+                return job->cancel_requested.load();
+            },
+            nullptr);
+        unregister_job(job_id);
+        return {{"ok", true}, {"value", ret}, {"job_id", job_id}};
+    }
+    if (method == "net.start_sdcard_print") {
+        auto f = net<int (*)(void*, BBL::PrintParams, OnUpdateStatusFn, WasCancelledFn)>("bambu_network_start_sdcard_print");
+        auto a = lookup_agent();
+        if (!f || !a) return not_supported(method);
+        const auto job_id = payload.value("client_job_id", 0LL);
+        const auto params_json = payload.value("params", nlohmann::json::object());
+        auto job = std::make_shared<HostJobState>();
+        job->job_id = job_id;
+        job->agent_handle = agent_id;
+        job->kind = "start_sdcard_print";
+        register_job(job);
+        const int ret = f(a, print_params_from_json(params_json),
+            [this, job](int status, int code, std::string msg) {
+                queue_event(job->agent_handle, "job.update_status", {{"job_id", job->job_id}, {"kind", job->kind}, {"status", status}, {"code", code}, {"msg", msg}});
+            },
+            [job]() {
+                return job->cancel_requested.load();
+            });
+        unregister_job(job_id);
+        return {{"ok", true}, {"value", ret}, {"job_id", job_id}};
+    }
     if (method == "net.get_studio_info_url") { auto f = net<std::string (*)(void*)>("bambu_network_get_studio_info_url"); auto a = lookup_agent(); return f && a ? nlohmann::json{{"ok", true}, {"value", f(a)}} : not_supported(method); }
     if (method == "net.modify_printer_name") { auto f = net<int (*)(void*, std::string, std::string)>("bambu_network_modify_printer_name"); auto a = lookup_agent(); return f && a ? nlohmann::json{{"ok", true}, {"value", f(a, payload.value("dev_id", std::string()), payload.value("dev_name", std::string()))}} : not_supported(method); }
     if (method == "net.get_task_plate_index") { auto f = net<int (*)(void*, std::string, int*)>("bambu_network_get_task_plate_index"); auto a = lookup_agent(); if (!f || !a) return not_supported(method); int plate_index = -1; const int ret = f(a, payload.value("task_id", std::string()), &plate_index); return {{"ok", true}, {"value", ret}, {"plate_index", plate_index}}; }

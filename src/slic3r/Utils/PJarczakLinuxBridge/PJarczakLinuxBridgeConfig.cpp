@@ -285,12 +285,16 @@ bool abi_version_matches_expected(const std::string& actual_version, std::string
         set_reason(reason, expected.empty() ? "expected ABI version empty" : "actual ABI version empty");
         return false;
     }
-    if (actual_version != expected) {
-        set_reason(reason, "ABI version mismatch: expected=" + expected + ", actual=" + actual_version);
-        return false;
+    if (actual_version == expected) {
+        set_reason(reason, "ok");
+        return true;
     }
-    set_reason(reason, "ok");
-    return true;
+    if (expected.size() >= 8 && actual_version.size() >= 8 && actual_version.compare(0, 8, expected, 0, 8) == 0) {
+        set_reason(reason, "ok");
+        return true;
+    }
+    set_reason(reason, "ABI version mismatch: expected=" + expected + ", actual=" + actual_version);
+    return false;
 }
 
 bool validate_linux_payload_file_against_manifest(const std::string& file_path, const std::string& manifest_path, std::string* reason)

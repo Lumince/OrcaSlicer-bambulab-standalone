@@ -948,13 +948,22 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
     }
 
 #if defined(__WINDOWS__)
-    if (GUI::wxGetApp().is_running_on_arm64() && !NetworkAgent::use_legacy_network) {
-        //set to arm64 for plugins
-        std::map<std::string, std::string> current_headers = Slic3r::Http::get_extra_headers();
-        current_headers["X-BBL-OS-Type"] = "windows_arm";
+    std::map<std::string, std::string> previous_headers = Slic3r::Http::get_extra_headers();
+    bool plugin_headers_overridden = false;
 
+    if (Slic3r::PJarczakLinuxBridge::enabled()) {
+        std::map<std::string, std::string> current_headers = previous_headers;
+        current_headers["X-BBL-OS-Type"] = Slic3r::PJarczakLinuxBridge::forced_download_os_type();
+        current_headers["X-BBL-Client-Name"] = "BambuStudio";
+        Slic3r::Http::set_extra_headers(current_headers);
+        BOOST_LOG_TRIVIAL(info) << boost::format("set X-BBL-OS-Type to %1% for bridge plugin sync") % Slic3r::PJarczakLinuxBridge::forced_download_os_type();
+        plugin_headers_overridden = true;
+    } else if (GUI::wxGetApp().is_running_on_arm64() && !NetworkAgent::use_legacy_network) {
+        std::map<std::string, std::string> current_headers = previous_headers;
+        current_headers["X-BBL-OS-Type"] = "windows_arm";
         Slic3r::Http::set_extra_headers(current_headers);
         BOOST_LOG_TRIVIAL(info) << boost::format("set X-BBL-OS-Type to windows_arm");
+        plugin_headers_overridden = true;
     }
 #endif
     try {
@@ -968,13 +977,9 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
         BOOST_LOG_TRIVIAL(warning) << format("[Orca Updater] sync_plugins: %1%", e.what());
     }
 #if defined(__WINDOWS__)
-    if (GUI::wxGetApp().is_running_on_arm64() && !NetworkAgent::use_legacy_network) {
-        //set back
-        std::map<std::string, std::string> current_headers = Slic3r::Http::get_extra_headers();
-        current_headers["X-BBL-OS-Type"] = "windows";
-
-        Slic3r::Http::set_extra_headers(current_headers);
-        BOOST_LOG_TRIVIAL(info) << boost::format("set X-BBL-OS-Type back to windows");
+    if (plugin_headers_overridden) {
+        Slic3r::Http::set_extra_headers(previous_headers);
+        BOOST_LOG_TRIVIAL(info) << "restored plugin sync headers";
     }
 #endif
 

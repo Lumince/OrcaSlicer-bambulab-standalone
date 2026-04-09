@@ -1246,6 +1246,7 @@ int GUI_App::download_plugin(std::string name, std::string package_name, Install
     if (pj_force_linux_payload) {
         auto headers = saved_headers;
         headers["X-BBL-OS-Type"] = Slic3r::PJarczakLinuxBridge::forced_download_os_type();
+        headers["X-BBL-Client-Name"] = "BambuStudio";
         Slic3r::Http::set_extra_headers(headers);
         changed_headers = true;
     }
@@ -2387,13 +2388,26 @@ std::map<std::string, std::string> GUI_App::get_extra_header()
 {
     std::map<std::string, std::string> extra_headers;
     extra_headers.insert(std::make_pair("X-BBL-Client-Type", "slicer"));
-    extra_headers.insert(std::make_pair("X-BBL-Client-Name", SLIC3R_APP_NAME));
+    extra_headers.insert(std::make_pair("X-BBL-Client-Name",
+#if defined(__WINDOWS__)
+        Slic3r::PJarczakLinuxBridge::enabled() ? std::string("BambuStudio") : std::string(SLIC3R_APP_NAME)
+#else
+        std::string(SLIC3R_APP_NAME)
+#endif
+    ));
     extra_headers.insert(std::make_pair("X-BBL-Client-Version", VersionInfo::convert_full_version(SLIC3R_VERSION)));
 #if defined(__WINDOWS__)
+    if (Slic3r::PJarczakLinuxBridge::enabled()) {
+        extra_headers.insert(std::make_pair("X-BBL-OS-Type", Slic3r::PJarczakLinuxBridge::forced_download_os_type()));
+    }
 #ifdef _M_X64
-    extra_headers.insert(std::make_pair("X-BBL-OS-Type", "windows"));
+    else {
+        extra_headers.insert(std::make_pair("X-BBL-OS-Type", "windows"));
+    }
 #else
-    extra_headers.insert(std::make_pair("X-BBL-OS-Type", "windows_arm"));
+    else {
+        extra_headers.insert(std::make_pair("X-BBL-OS-Type", "windows_arm"));
+    }
 #endif
 #elif defined(__APPLE__)
     extra_headers.insert(std::make_pair("X-BBL-OS-Type", "macos"));
