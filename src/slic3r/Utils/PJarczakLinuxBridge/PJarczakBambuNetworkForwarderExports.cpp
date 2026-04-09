@@ -1,5 +1,6 @@
 #include "PJarczakBambuNetworkForwarderState.hpp"
 #include "PJarczakLinuxBridgeCompat.hpp"
+#include "PJarczakLinuxBridgeConfig.hpp"
 #include "PJarczakLinuxSoBridgeEventPump.hpp"
 #include "PJarczakLinuxSoBridgeRpcClient.hpp"
 #include "../../../../shared/pjarczak_linux_plugin_bridge_core/BridgeCoreJson.hpp"

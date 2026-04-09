@@ -108,7 +108,7 @@ std::filesystem::path configured_plugin_cache_dir()
 
     const auto appdata = required_env("APPDATA");
     if (!appdata.empty())
-        return std::filesystem::path(appdata) / "BambuStudio" / "plugins";
+        return std::filesystem::path(appdata) / "OrcaSlicer" / "plugins";
 
     return {};
 }

@@ -2,46 +2,27 @@
 #include "PJarczakLinuxBridgeConfig.hpp"
 
 #include <cstdlib>
+#include <dlfcn.h>
+#include <filesystem>
+#include <string>
 
 namespace Slic3r::PJarczakLinuxBridge {
 
 namespace {
 
-const char* env_value(const char* name)
+std::filesystem::path module_dir()
 {
-    return std::getenv(name);
+    Dl_info info{};
+    if (!dladdr(reinterpret_cast<const void*>(&build_default_launch_spec), &info) || info.dli_fname == nullptr)
+        return {};
+    return std::filesystem::path(info.dli_fname).parent_path();
 }
 
-std::string env_or(const char* name, const char* fallback)
-{
-    if (const char* v = env_value(name); v && *v)
-        return v;
-    return fallback;
 }
-
-std::string shell_quote(const std::string& value)
-{
-    std::string out = "'";
-    for (char ch : value) {
-        if (ch == '\'')
-            out += "'\\''";
-        else
-            out += ch;
-    }
-    out += "'";
-    return out;
-}
-
-std::string wrapper_script_name()
-{
-    return "pjarczak_bambu_macos_linux_wrapper.sh";
-}
-
-} // namespace
 
 std::string host_executable_name()
 {
-    return "pjarczak_bambu_linux_host";
+    return host_executable_file_name();
 }
 
 std::string host_pipe_hint()
@@ -49,34 +30,40 @@ std::string host_pipe_hint()
     return "stdio";
 }
 
+std::string launch_preflight_error()
+{
+    const std::filesystem::path plugin_dir = module_dir();
+    if (plugin_dir.empty())
+        return "bridge launcher could not resolve plugin directory";
+    if (!std::filesystem::exists(plugin_dir / host_executable_file_name()))
+        return "linux host executable missing in plugin directory";
+    const char* runner = std::getenv("PJARCZAK_MAC_LINUX_GUEST_RUNNER");
+    if (!runner || !*runner)
+        return "PJARCZAK_MAC_LINUX_GUEST_RUNNER is not set";
+    return {};
+}
+
 LaunchSpec build_default_launch_spec()
 {
+    const std::filesystem::path plugin_dir = module_dir();
+
+    const char* wrapper_env = std::getenv("PJARCZAK_BAMBU_HOST_WRAPPER");
+    const std::filesystem::path wrapper_path = (wrapper_env && *wrapper_env)
+        ? std::filesystem::path(wrapper_env)
+        : (plugin_dir / mac_host_wrapper_file_name());
+
+    const std::filesystem::path host_path = plugin_dir / host_executable_file_name();
+
     LaunchSpec spec;
-    if (const char* cmd = env_value("PJARCZAK_MAC_LINUX_WRAPPER_CMD"); cmd && *cmd) {
-        spec.description = "mac via PJARCZAK_MAC_LINUX_WRAPPER_CMD";
-        spec.argv = {"/bin/sh", "-lc", cmd};
-        return spec;
-    }
-
-    const std::string wrapper = sibling_binary_path(wrapper_script_name());
-    const std::string host = sibling_binary_path(host_executable_name());
-    const std::string runtime_dir_default = sibling_binary_path("pjarczak_bambu_linux_host.runtime");
-    const std::string runtime_dir = env_or("PJARCZAK_MAC_RUNTIME_DIR", runtime_dir_default.c_str());
-    const std::string plugin_dir = env_or("PJARCZAK_BAMBU_PLUGIN_DIR", "");
-
-    std::string cmd;
-    cmd += "exec ";
-    cmd += shell_quote(wrapper);
-    cmd += " ";
-    cmd += shell_quote(host);
-    cmd += " ";
-    cmd += shell_quote(runtime_dir);
-    cmd += " ";
-    cmd += shell_quote(plugin_dir);
-
-    spec.description = "mac via wrapper script";
-    spec.argv = {"/bin/sh", "-lc", cmd};
+    spec.description = "mac via external linux guest wrapper";
+    spec.argv = {wrapper_path.string(), host_path.string()};
+    spec.env = {
+        {"PJARCZAK_BAMBU_PLUGIN_DIR", plugin_dir.string()},
+        {"PJARCZAK_BAMBU_NETWORK_SO", (plugin_dir / linux_network_library_name()).string()},
+        {"PJARCZAK_BAMBU_SOURCE_SO", (plugin_dir / linux_source_library_name()).string()},
+        {"PJARCZAK_BAMBU_REQUIRE_LINUX_GUEST", "1"}
+    };
     return spec;
 }
 
-} // namespace Slic3r::PJarczakLinuxBridge
+}
