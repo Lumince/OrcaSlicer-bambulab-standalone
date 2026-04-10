@@ -194,12 +194,12 @@ std::string windows_wsl_distro_file_name()
 
 std::string windows_wsl_import_script_file_name()
 {
-    return "pjarczak-import-wsl-runtime.ps1";
+    return "install_runtime.ps1";
 }
 
 std::string windows_wsl_validate_script_file_name()
 {
-    return "pjarczak-validate-wsl-runtime.ps1";
+    return "verify_runtime.ps1";
 }
 
 std::string windows_wsl_bootstrap_script_file_name()

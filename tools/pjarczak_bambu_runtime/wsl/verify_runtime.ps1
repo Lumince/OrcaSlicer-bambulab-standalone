@@ -48,6 +48,25 @@ function To-WslPath([string]$Path) {
     return ($full -replace '\\', '/')
 }
 
+function Invoke-NativeCapture([string]$FilePath, [string[]]$ArgumentList) {
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden
+        $stdoutText = if (Test-Path $stdoutPath) { [System.IO.File]::ReadAllText($stdoutPath) } else { '' }
+        $stderrText = if (Test-Path $stderrPath) { [System.IO.File]::ReadAllText($stderrPath) } else { '' }
+        $combined = (($stdoutText + "`n" + $stderrText).Trim())
+        return @{
+            ExitCode = $proc.ExitCode
+            StdOut = $stdoutText
+            StdErr = $stderrText
+            Combined = $combined
+        }
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $stdoutPath, $stderrPath
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($PackageDir)) {
     $PackageDir = Get-ScriptDir
 }
@@ -99,9 +118,13 @@ if (!(Test-Path $wsl)) {
     throw 'wsl.exe not found'
 }
 
-$distroList = & $wsl -l -q 2>$null
-if ($LASTEXITCODE -ne 0) {
-    throw 'Failed to query installed WSL distros'
+$distroQuery = Invoke-NativeCapture $wsl @('-l', '-q')
+if ($distroQuery.ExitCode -ne 0) {
+    throw "Failed to query installed WSL distros: $($distroQuery.Combined)"
+}
+$distroList = @()
+if (-not [string]::IsNullOrWhiteSpace($distroQuery.StdOut)) {
+    $distroList = $distroQuery.StdOut -split "`r?`n"
 }
 if (-not ($distroList | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq $DistroName })) {
     throw "WSL distro '$DistroName' is not installed"
@@ -114,9 +137,9 @@ if (-not [string]::IsNullOrWhiteSpace($PluginCacheDir)) {
 }
 $bootstrapWsl = "$packageDirWsl/pjarczak_wsl_run_host.sh"
 
-$probe = & $wsl -d $DistroName --user root -- sh $bootstrapWsl --probe $packageDirWsl $pluginCacheDirWsl 2>&1
-if ($LASTEXITCODE -ne 0) {
-    $probeText = ($probe | Out-String).Trim()
+$probe = Invoke-NativeCapture $wsl @('-d', $DistroName, '--user', 'root', '--', 'sh', $bootstrapWsl, '--probe', $packageDirWsl, $pluginCacheDirWsl)
+if ($probe.ExitCode -ne 0) {
+    $probeText = $probe.Combined
     if ($AllowMissingLinuxPlugin -and $probeText -match 'plugin_not_downloaded') {
         Write-Host 'WSL runtime package OK, linux plugin not downloaded yet.'
         Write-Host $probeText
@@ -126,4 +149,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host 'WSL runtime probe OK'
-Write-Host (($probe | Out-String).Trim())
+Write-Host $probe.Combined

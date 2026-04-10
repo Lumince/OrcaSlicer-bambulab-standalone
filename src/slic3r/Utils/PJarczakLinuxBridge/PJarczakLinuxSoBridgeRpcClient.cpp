@@ -3,6 +3,9 @@
 #include "PJarczakLinuxSoBridgeRpcProtocol.hpp"
 
 #include <boost/process/environment.hpp>
+#if defined(_WIN32)
+#include <boost/process/windows.hpp>
+#endif
 
 #include <stdexcept>
 
@@ -63,7 +66,12 @@ bool RpcClient::start_locked()
         }
 
         auto proc = std::make_unique<Proc>();
+#if defined(_WIN32)
+        proc->child = bp::child(spec.argv[0], bp::args(args), bp::std_in < proc->in, bp::std_out > proc->out,
+                                bp::windows::create_no_window, bp::windows::hide, env);
+#else
         proc->child = bp::child(spec.argv[0], bp::args(args), bp::std_in < proc->in, bp::std_out > proc->out, env);
+#endif
         m_proc = std::move(proc);
         m_reader_stop.store(false, std::memory_order_release);
         m_handshake_ok = false;

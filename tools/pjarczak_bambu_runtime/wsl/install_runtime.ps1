@@ -221,7 +221,21 @@ $verifyArgs = @(
     '-AllowMissingLinuxPlugin'
 )
 
-& powershell @verifyArgs
+$verifyShell = $null
+$pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
+if ($pwshCmd) {
+    $verifyShell = $pwshCmd.Source
+} else {
+    $powershellCmd = Get-Command powershell -ErrorAction SilentlyContinue
+    if ($powershellCmd) {
+        $verifyShell = $powershellCmd.Source
+    }
+}
+if ([string]::IsNullOrWhiteSpace($verifyShell)) {
+    throw 'No PowerShell host found to run verify_runtime.ps1'
+}
+
+& $verifyShell @verifyArgs
 if ($LASTEXITCODE -ne 0) {
     throw 'verify_runtime.ps1 failed'
 }

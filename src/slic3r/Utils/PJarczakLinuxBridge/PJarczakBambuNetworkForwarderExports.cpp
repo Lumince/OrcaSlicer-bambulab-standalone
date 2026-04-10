@@ -33,6 +33,17 @@ static std::string g_last_error;
 static std::string bridge_reported_version()
 {
     const auto j = RpcClient::instance().invoke_json("bridge.handshake", nlohmann::json::object());
+    if (!j.value("ok", false)) {
+        if (j.contains("error"))
+            g_last_error = j["error"].get<std::string>();
+        return {};
+    }
+    if (!j.value("network_loaded", false) || !j.value("source_loaded", false)) {
+        g_last_error = "bridge host failed to load linux payload: network=" +
+            j.value("network_status", std::string("unknown")) +
+            ", source=" + j.value("source_status", std::string("unknown"));
+        return {};
+    }
     const auto actual = j.value("network_actual_abi_version", std::string());
     if (!actual.empty())
         return actual;
@@ -405,7 +416,18 @@ PJBRIDGE_EXPORT int bambu_network_bind_detect(void* agent, std::string dev_ip, s
 PJBRIDGE_EXPORT int bambu_network_report_consent(void* agent, std::string expand) { auto* a = require_agent(agent); return a ? RpcClient::instance().invoke_int("net.report_consent", {{"agent", agent_id(a)}, {"expand", expand}}) : invalid_handle(); }
 PJBRIDGE_EXPORT int bambu_network_bind(void* agent, std::string dev_ip, std::string dev_id, std::string sec_link, std::string timezone, bool improved, OnUpdateStatusFn update) { auto* a = require_agent(agent); return invoke_job_update_only("net.bind", "bind", a, {{"dev_ip", dev_ip}, {"dev_id", dev_id}, {"sec_link", sec_link}, {"timezone", timezone}, {"improved", improved}}, std::move(update)); }
 PJBRIDGE_EXPORT int bambu_network_unbind(void* agent, std::string dev_id) { auto* a = require_agent(agent); return a ? RpcClient::instance().invoke_int("net.unbind", {{"agent", agent_id(a)}, {"dev_id", dev_id}}) : invalid_handle(); }
-PJBRIDGE_EXPORT std::string bambu_network_get_bambulab_host(void* agent) { auto* a = require_agent(agent); if (!a) return {}; a->bambulab_host = RpcClient::instance().invoke_string("net.get_bambulab_host", {{"agent", agent_id(a)}}); return a->bambulab_host; }
+PJBRIDGE_EXPORT std::string bambu_network_get_bambulab_host(void* agent)
+{
+    auto* a = require_agent(agent);
+    if (!a)
+        return {};
+    const auto value = RpcClient::instance().invoke_string("net.get_bambulab_host", {{"agent", agent_id(a)}});
+    if (!value.empty())
+        a->bambulab_host = value;
+    if (a->bambulab_host.empty())
+        a->bambulab_host = "https://bambulab.com";
+    return a->bambulab_host;
+}
 PJBRIDGE_EXPORT std::string bambu_network_get_user_selected_machine(void* agent) { auto* a = require_agent(agent); if (!a) return {}; a->selected_machine = RpcClient::instance().invoke_string("net.get_user_selected_machine", {{"agent", agent_id(a)}}); return a->selected_machine; }
 PJBRIDGE_EXPORT int bambu_network_set_user_selected_machine(void* agent, std::string dev_id) { auto* a = require_agent(agent); if (!a) return invalid_handle(); a->selected_machine = std::move(dev_id); return RpcClient::instance().invoke_int("net.set_user_selected_machine", {{"agent", agent_id(a)}, {"dev_id", a->selected_machine}}); }
 

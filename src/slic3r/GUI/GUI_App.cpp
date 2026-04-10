@@ -3137,6 +3137,62 @@ bool GUI_App::on_init_inner()
     return true;
 }
 
+void pjarczak_set_reason(std::string* reason, std::string value)
+{
+    if (reason)
+        *reason = std::move(value);
+}
+
+bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder, std::string* reason)
+{
+    if (!Slic3r::PJarczakLinuxBridge::enabled()) {
+        pjarczak_set_reason(reason, "bridge disabled");
+        return true;
+    }
+
+    const std::string required_files[] = {
+        Slic3r::PJarczakLinuxBridge::bridge_network_current_dir_name(),
+        Slic3r::PJarczakLinuxBridge::host_executable_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
+        Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+        Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
+        Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
+        "liblive555.so",
+        "libagora_rtc_sdk.so",
+        "libagora-fdkaac.so",
+        "network_plugins.json"
+    };
+
+    for (const std::string& file_name : required_files) {
+        const auto candidate = plugin_folder / file_name;
+        if (!boost::filesystem::exists(candidate) || boost::filesystem::is_directory(candidate)) {
+            pjarczak_set_reason(reason, "missing required runtime file: " + file_name);
+            return false;
+        }
+    }
+
+    std::string manifest_reason;
+    if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_set_against_manifest(plugin_folder, &manifest_reason)) {
+        pjarczak_set_reason(reason, "linux payload manifest validation failed: " + manifest_reason);
+        return false;
+    }
+
+    for (const std::string& file_name : {std::string("liblive555.so"), std::string("libagora_rtc_sdk.so"), std::string("libagora-fdkaac.so")}) {
+        std::string validate_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_so_binary((plugin_folder / file_name).string(), &validate_reason)) {
+            pjarczak_set_reason(reason, file_name + ": " + validate_reason);
+            return false;
+        }
+    }
+
+    pjarczak_set_reason(reason, "ok");
+    return true;
+}
+
 void pjarczak_copy_runtime_file_if_exists(const boost::filesystem::path& src_dir,
                                           const boost::filesystem::path& dst_dir,
                                           const std::string& file_name)
@@ -3184,12 +3240,12 @@ void pjarczak_copy_local_overlay_runtime(const boost::filesystem::path& plugin_f
         Slic3r::PJarczakLinuxBridge::bridge_network_current_dir_name(),
         Slic3r::PJarczakLinuxBridge::host_executable_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
         Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
-        "install_runtime.ps1",
         "install_runtime.cmd",
-        "verify_runtime.ps1",
         "README_runtime_bridge.txt",
         "assemble_windows_runtime_bundle.ps1",
         "libc.so.6",
@@ -3370,13 +3426,22 @@ void GUI_App::copy_network_if_available()
 bool GUI_App::on_init_network(bool try_backup)
 {
     auto should_load_networking_plugin = app_config->get_bool("installed_networking");
+    const bool bridge_mode = Slic3r::PJarczakLinuxBridge::enabled();
+    const boost::filesystem::path bridge_plugin_folder = boost::filesystem::path(data_dir()) / "plugins";
+    std::string bridge_payload_reason;
+    const bool bridge_payload_ready = !bridge_mode || pjarczak_bridge_payload_ready(bridge_plugin_folder, &bridge_payload_reason);
+    bool create_network_agent = false;
+
+    const auto mark_networking_need_update = [this]() {
+        m_networking_need_update = true;
+    };
 
     std::string config_version = app_config->get_network_plugin_version();
 
     if (should_load_networking_plugin) {
         if (config_version.empty()) {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": no version configured, need to download";
-            m_networking_need_update = true;
+            mark_networking_need_update();
 
             if (!m_device_manager)
                 m_device_manager = new Slic3r::DeviceManager();
@@ -3403,14 +3468,21 @@ bool GUI_App::on_init_network(bool try_backup)
                 }
             }
 
-            if (check_networking_version()) {
+            if (bridge_mode && !bridge_payload_ready) {
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": bridge payload/runtime not ready, reason=" << bridge_payload_reason;
+                mark_networking_need_update();
+            } else if (check_networking_version()) {
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network, compatibility version";
-                auto bambu_source = Slic3r::NetworkAgent::get_bambu_source_entry();
-                if (!bambu_source) {
-                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": can not get bambu source module!";
-                    m_networking_compatible = false;
-                    if (should_load_networking_plugin) {
-                        m_networking_need_update = true;
+                if (bridge_mode) {
+                    create_network_agent = true;
+                } else {
+                    auto bambu_source = Slic3r::NetworkAgent::get_bambu_source_entry();
+                    if (!bambu_source) {
+                        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": can not get bambu source module!";
+                        m_networking_compatible = false;
+                        mark_networking_need_update();
+                    } else {
+                        create_network_agent = true;
                     }
                 }
             } else {
@@ -3422,29 +3494,37 @@ bool GUI_App::on_init_network(bool try_backup)
                     goto __retry;
                 }
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network, version dismatch, need upload network module";
-                if (should_load_networking_plugin) {
-                    m_networking_need_update = true;
-                }
+                mark_networking_need_update();
             }
         } else {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network, load dll failed";
-            if (should_load_networking_plugin) {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network, need upload network module";
-                m_networking_need_update = true;
-            }
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network, need upload network module";
+            mark_networking_need_update();
         }
     }
 
-    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", create network agent...");
-    //std::string data_dir = wxStandardPaths::Get().GetUserDataDir().ToUTF8().data();
-    std::string data_directory = data_dir();
+    if (create_network_agent) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", create network agent...");
+        std::string data_directory = data_dir();
 
-    // Register all printer agents before creating the network agent
-    Slic3r::NetworkAgentFactory::register_all_agents();
+        Slic3r::NetworkAgentFactory::register_all_agents();
 
-    // m_agent = new Slic3r::NetworkAgent(data_directory);
-    std::unique_ptr<Slic3r::NetworkAgent> agent_ptr = Slic3r::create_agent_from_config(data_directory, app_config);
-    m_agent = agent_ptr.release();
+        std::unique_ptr<Slic3r::NetworkAgent> agent_ptr = Slic3r::create_agent_from_config(data_directory, app_config);
+        m_agent = agent_ptr.release();
+        if (!m_agent || !m_agent->get_network_agent()) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": create network agent returned null handle";
+            delete m_agent;
+            m_agent = nullptr;
+            m_networking_compatible = false;
+            mark_networking_need_update();
+            create_network_agent = false;
+        }
+
+        if (!create_network_agent) {
+            int result = Slic3r::NetworkAgent::unload_network_module();
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": unload_network_module after create_agent failure, result = " << result;
+        }
+    }
 
     if (!m_device_manager)
         m_device_manager = new Slic3r::DeviceManager(m_agent);
@@ -3467,16 +3547,15 @@ bool GUI_App::on_init_network(bool try_backup)
         m_device_manager->EnableMultiMachine(false);
     }
 
-    //BBS set config dir
+    std::string data_directory = data_dir();
+
     if (m_agent) {
         m_agent->set_config_dir(data_directory);
     }
-    //BBS start http log
     if (m_agent) {
         m_agent->init_log();
     }
 
-    //BBS set cert dir
     if (m_agent)
         m_agent->set_cert_file(resources_dir() + "/cert", "slicer_base64.cer");
 
