@@ -3150,38 +3150,57 @@ bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder,
         return true;
     }
 
+    const auto has_file = [&plugin_folder](const std::string& file_name) {
+        const auto candidate = plugin_folder / file_name;
+        return boost::filesystem::exists(candidate) && !boost::filesystem::is_directory(candidate);
+    };
+
     const std::string required_files[] = {
         Slic3r::PJarczakLinuxBridge::bridge_network_current_dir_name(),
         Slic3r::PJarczakLinuxBridge::host_executable_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
-        Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
         Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
-        Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
-        Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
-        "liblive555.so",
-        "libagora_rtc_sdk.so",
-        "libagora-fdkaac.so",
-        "network_plugins.json"
+        Slic3r::PJarczakLinuxBridge::linux_source_library_name()
     };
 
     for (const std::string& file_name : required_files) {
-        const auto candidate = plugin_folder / file_name;
-        if (!boost::filesystem::exists(candidate) || boost::filesystem::is_directory(candidate)) {
+        if (!has_file(file_name)) {
             pjarczak_set_reason(reason, "missing required runtime file: " + file_name);
             return false;
         }
     }
 
-    std::string manifest_reason;
-    if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_set_against_manifest(plugin_folder, &manifest_reason)) {
-        pjarczak_set_reason(reason, "linux payload manifest validation failed: " + manifest_reason);
+    if (!has_file(Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name()) &&
+        !has_file("pjarczak-install-wsl-runtime.ps1")) {
+        pjarczak_set_reason(reason, "missing required runtime file: " + Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name());
         return false;
     }
 
+    for (const std::string& file_name : {
+            Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+            Slic3r::PJarczakLinuxBridge::linux_source_library_name()}) {
+        std::string validate_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_so_binary((plugin_folder / file_name).string(), &validate_reason)) {
+            pjarczak_set_reason(reason, file_name + ": " + validate_reason);
+            return false;
+        }
+    }
+
+    const auto manifest_path = plugin_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name();
+    if (boost::filesystem::exists(manifest_path) && !boost::filesystem::is_directory(manifest_path)) {
+        std::string manifest_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_set_against_manifest(plugin_folder, &manifest_reason)) {
+            pjarczak_set_reason(reason, "linux payload manifest validation failed: " + manifest_reason);
+            return false;
+        }
+    }
+
     for (const std::string& file_name : {std::string("liblive555.so"), std::string("libagora_rtc_sdk.so"), std::string("libagora-fdkaac.so")}) {
+        if (!has_file(file_name))
+            continue;
         std::string validate_reason;
         if (!Slic3r::PJarczakLinuxBridge::validate_linux_so_binary((plugin_folder / file_name).string(), &validate_reason)) {
             pjarczak_set_reason(reason, file_name + ": " + validate_reason);
