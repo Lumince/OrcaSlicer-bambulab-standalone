@@ -808,9 +808,9 @@ bool PresetUpdater::priv::get_cached_plugins_version(std::string& cached_version
         required_files = {
             cache_folder / Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
             cache_folder / Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
-            cache_folder / Slic3r::PJarczakLinuxBridge::linux_live555_library_name(),
-            cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_rtc_sdk_library_name(),
-            cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_fdkaac_library_name(),
+            cache_folder / "liblive555.so",
+            cache_folder / "libagora_rtc_sdk.so",
+            cache_folder / "libagora-fdkaac.so",
             cache_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
             cache_folder / "network_plugins.json"
         };
@@ -918,9 +918,9 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
                 cache_files = {
                     cache_folder / Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
                     cache_folder / Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
-                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_live555_library_name(),
-                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_rtc_sdk_library_name(),
-                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_agora_fdkaac_library_name(),
+                    cache_folder / "liblive555.so",
+                    cache_folder / "libagora_rtc_sdk.so",
+                    cache_folder / "libagora-fdkaac.so",
                     cache_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
                     cache_folder / "network_plugins.json"
                 };

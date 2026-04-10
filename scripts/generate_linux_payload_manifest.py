@@ -23,9 +23,10 @@ def main():
         {'name': net.name, 'sha256': sha256(net), 'abi_version': args.abi_version},
         {'name': src.name, 'sha256': sha256(src)},
     ]
-    live555 = args.plugin_dir / 'liblive555.so'
-    if live555.exists():
-        files.append({'name': live555.name, 'sha256': sha256(live555)})
+    for extra_name in ('liblive555.so', 'libagora_rtc_sdk.so', 'libagora-fdkaac.so'):
+        extra = args.plugin_dir / extra_name
+        if extra.exists():
+            files.append({'name': extra.name, 'sha256': sha256(extra)})
     manifest = {'files': files}
     out = args.out or (args.plugin_dir / 'linux_payload_manifest.json')
     out.write_text(json.dumps(manifest, indent=2) + '\n')

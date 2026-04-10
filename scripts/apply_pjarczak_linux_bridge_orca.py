@@ -559,7 +559,7 @@ GUI_COPY = r'''{
         for (const auto& file_name : {
                 Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
                 Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
-                Slic3r::PJarczakLinuxBridge::linux_live555_library_name(),
+                "liblive555.so",
                 Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name() }) {
             const auto src = cache_folder / file_name;
             if (!boost::filesystem::exists(src))
