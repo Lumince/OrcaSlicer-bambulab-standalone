@@ -270,9 +270,16 @@ PJBRIDGE_EXPORT void* bambu_network_create_agent(std::string log_dir)
     auto* a = as_agent(new_agent(log_dir));
     auto& rpc = RpcClient::instance();
     const auto j = ok_or_error(rpc.invoke_json("net.create_agent", {{"log_dir", log_dir}}));
-    if (!j.value("ok", false))
-        return a;
+    if (!j.value("ok", false)) {
+        delete_agent(a);
+        return nullptr;
+    }
     a->remote_handle = j.value("value", 0LL);
+    if (a->remote_handle == 0) {
+        g_last_error = "bridge host returned invalid remote agent handle";
+        delete_agent(a);
+        return nullptr;
+    }
     register_remote_agent(a);
     ensure_event_pump();
     return a;

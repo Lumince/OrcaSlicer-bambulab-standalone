@@ -204,7 +204,7 @@ std::string windows_wsl_validate_script_file_name()
 
 std::string windows_wsl_bootstrap_script_file_name()
 {
-    return "pjarczak-wsl-run-host.sh";
+    return "pjarczak_wsl_run_host.sh";
 }
 
 std::string windows_wsl_rootfs_file_name()

@@ -123,16 +123,37 @@ std::string wsl_exe_path()
     return narrow((std::filesystem::path(path) / L"wsl.exe").wstring());
 }
 
+std::string legacy_windows_wsl_bootstrap_script_file_name()
+{
+    return "pjarczak-wsl-run-host.sh";
+}
+
+std::filesystem::path resolve_bootstrap_script_path(const std::filesystem::path& plugin_dir)
+{
+    const auto primary = plugin_dir / windows_wsl_bootstrap_script_file_name();
+    if (std::filesystem::exists(primary))
+        return primary;
+
+    const auto legacy = plugin_dir / legacy_windows_wsl_bootstrap_script_file_name();
+    if (std::filesystem::exists(legacy))
+        return legacy;
+
+    return {};
+}
+
 std::string first_missing_runtime_file(const std::filesystem::path& plugin_dir)
 {
     for (const auto& name : {
             host_executable_file_name(),
-            windows_wsl_bootstrap_script_file_name(),
             windows_wsl_distro_file_name()
         }) {
         if (!std::filesystem::exists(plugin_dir / name))
             return name;
     }
+
+    if (resolve_bootstrap_script_path(plugin_dir).empty())
+        return windows_wsl_bootstrap_script_file_name();
+
     return {};
 }
 
@@ -181,9 +202,10 @@ LaunchSpec build_default_launch_spec()
     }
 
     const auto plugin_cache_dir = configured_plugin_cache_dir();
+    const auto bootstrap_path = resolve_bootstrap_script_path(plugin_dir);
     const std::string plugin_dir_wsl = to_wsl_path(plugin_dir);
     const std::string plugin_cache_wsl = plugin_cache_dir.empty() ? std::string() : to_wsl_path(plugin_cache_dir);
-    const std::string bootstrap_wsl = to_wsl_path(plugin_dir / windows_wsl_bootstrap_script_file_name());
+    const std::string bootstrap_wsl = bootstrap_path.empty() ? std::string() : to_wsl_path(bootstrap_path);
 
     LaunchSpec spec;
     spec.description = "windows via explicit WSL2 distro with linux-local runtime bootstrap";

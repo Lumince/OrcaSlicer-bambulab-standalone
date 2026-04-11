@@ -173,6 +173,16 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         << ", start_print=" << (m_start_print ? "loaded" : "null")
         << ", start_local_print=" << (m_start_local_print ? "loaded" : "null");
 
+    if (pj_bridge && loaded_version.empty()) {
+        set_load_error(
+            "Linux bridge payload not ready",
+            "Bridge DLL loaded, but the WSL2 linux payload handshake did not return a version",
+            library
+        );
+        unload();
+        return -1;
+    }
+
     return 0;
 }
 

@@ -137,7 +137,6 @@ $requiredFiles = @(
     'pjarczak_wsl_distro.txt',
     'install_runtime.ps1',
     'verify_runtime.ps1',
-    'pjarczak_wsl_run_host.sh',
     'pjarczak_bambu_linux_host',
     'windows-wsl2-rootfs.tar'
 )
@@ -150,6 +149,10 @@ foreach ($name in $requiredFiles) {
 }
 
 $bootstrapPath = Join-Path $PackageDir 'pjarczak_wsl_run_host.sh'
+if (!(Test-Path $bootstrapPath)) { $bootstrapPath = Join-Path $PackageDir 'pjarczak-wsl-run-host.sh' }
+if (!(Test-Path $bootstrapPath)) {
+    throw 'Missing package file: pjarczak_wsl_run_host.sh'
+}
 Convert-FileToLf $bootstrapPath
 
 $wsl = Join-Path $env:WINDIR 'System32\wsl.exe'
@@ -183,7 +186,7 @@ $pluginCacheDirWsl = ""
 if (-not [string]::IsNullOrWhiteSpace($PluginCacheDir)) {
     $pluginCacheDirWsl = To-WslPath $PluginCacheDir
 }
-$bootstrapWsl = "$packageDirWsl/pjarczak_wsl_run_host.sh"
+$bootstrapWsl = "$packageDirWsl/$([System.IO.Path]::GetFileName($bootstrapPath))"
 
 $probe = Invoke-NativeCapture $wsl @('-d', $DistroName, '--user', 'root', '--', 'sh', $bootstrapWsl, '--probe', $packageDirWsl, $pluginCacheDirWsl)
 if ($probe.ExitCode -ne 0) {

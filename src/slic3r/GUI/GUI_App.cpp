@@ -3143,6 +3143,11 @@ void pjarczak_set_reason(std::string* reason, std::string value)
         *reason = std::move(value);
 }
 
+static const char* pjarczak_legacy_bootstrap_script_name()
+{
+    return "pjarczak-wsl-run-host.sh";
+}
+
 bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder, std::string* reason)
 {
     if (!Slic3r::PJarczakLinuxBridge::enabled()) {
@@ -3160,7 +3165,6 @@ bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder,
         Slic3r::PJarczakLinuxBridge::host_executable_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
-        Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
         Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
         Slic3r::PJarczakLinuxBridge::linux_source_library_name()
@@ -3176,6 +3180,12 @@ bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder,
     if (!has_file(Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name()) &&
         !has_file("pjarczak-install-wsl-runtime.ps1")) {
         pjarczak_set_reason(reason, "missing required runtime file: " + Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name());
+        return false;
+    }
+
+    if (!has_file(Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name()) &&
+        !has_file(pjarczak_legacy_bootstrap_script_name())) {
+        pjarczak_set_reason(reason, "missing required runtime file: " + Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name());
         return false;
     }
 
@@ -3262,6 +3272,7 @@ void pjarczak_copy_local_overlay_runtime(const boost::filesystem::path& plugin_f
         Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name(),
+        pjarczak_legacy_bootstrap_script_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
         Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
         "install_runtime.cmd",

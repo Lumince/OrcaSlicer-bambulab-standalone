@@ -109,6 +109,7 @@ if (-not $SkipCopyToPluginDir) {
         'pjarczak_bambu_linux_host',
         'pjarczak_wsl_distro.txt',
         'pjarczak_wsl_run_host.sh',
+        'pjarczak-wsl-run-host.sh',
         'install_runtime.ps1',
         'install_runtime.cmd',
         'verify_runtime.ps1',
@@ -135,7 +136,6 @@ $requiredFiles = @(
     'pjarczak_bambu_networking_bridge.dll',
     'pjarczak_bambu_linux_host',
     'pjarczak_wsl_distro.txt',
-    'pjarczak_wsl_run_host.sh',
     'install_runtime.ps1',
     'verify_runtime.ps1',
     'windows-wsl2-rootfs.tar'
@@ -148,13 +148,19 @@ foreach ($name in $requiredFiles) {
     }
 }
 
+$bootstrapPath = Join-Path $PackageDir 'pjarczak_wsl_run_host.sh'
+if (!(Test-Path $bootstrapPath)) { $bootstrapPath = Join-Path $PackageDir 'pjarczak-wsl-run-host.sh' }
+if (!(Test-Path $bootstrapPath)) {
+    throw 'Missing package file: pjarczak_wsl_run_host.sh'
+}
+
 try {
     & $wsl --status | Out-Null
 } catch {
     throw 'WSL is not ready. Run as Administrator once and execute: wsl --install --no-distribution ; wsl --update ; then reboot.'
 }
 
-Convert-FileToLf (Join-Path $PackageDir 'pjarczak_wsl_run_host.sh')
+Convert-FileToLf $bootstrapPath
 
 $distroList = & $wsl -l -q 2>$null
 if ($LASTEXITCODE -ne 0) {
