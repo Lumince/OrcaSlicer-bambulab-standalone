@@ -6,6 +6,7 @@
 #include "QidiPrinterAgent.hpp"
 #include "SnapmakerPrinterAgent.hpp"
 #include "MoonrakerPrinterAgent.hpp"
+#include "PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp"
 #include <boost/log/trivial.hpp>
 #include <map>
 #include <mutex>
@@ -156,6 +157,12 @@ std::unique_ptr<NetworkAgent> create_agent_from_config(const std::string& log_di
 
     // Determine cloud provider from config
     bool use_orca_cloud = app_config->get_bool("use_orca_cloud");
+#if defined(_MSC_VER) || defined(_WIN32)
+    if (Slic3r::PJarczakLinuxBridge::enabled() && app_config->get_bool("installed_networking")) {
+        BOOST_LOG_TRIVIAL(info) << "Linux bridge enabled on Windows - forcing BBL cloud agent";
+        use_orca_cloud = false;
+    }
+#endif
 
     // Create cloud agent
     std::shared_ptr<ICloudServiceAgent> cloud_agent;

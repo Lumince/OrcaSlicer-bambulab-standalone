@@ -7,6 +7,7 @@
 #include <boost/log/trivial.hpp>
 #include <boost/format.hpp>
 #include <boost/filesystem.hpp>
+#include <filesystem>
 #include "libslic3r/Utils.hpp"
 #include "slic3r/Utils/FileTransferUtils.hpp"
 
@@ -92,7 +93,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
 
 #if defined(_MSC_VER) || defined(_WIN32)
     if (pj_bridge) {
-        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(plugin_folder);
+        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(std::filesystem::path(plugin_folder.string()));
         wchar_t lib_wstr[512];
         memset(lib_wstr, 0, sizeof(lib_wstr));
         ::MultiByteToWideChar(CP_UTF8, 0, library.c_str(), int(library.size()) + 1, lib_wstr, int(sizeof(lib_wstr) / sizeof(lib_wstr[0])));
@@ -120,7 +121,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
     }
 #else
     if (pj_bridge) {
-        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(plugin_folder);
+        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(std::filesystem::path(plugin_folder.string()));
         m_networking_module = dlopen(library.c_str(), RTLD_LAZY);
     } else {
     #if defined(__WXMAC__)
