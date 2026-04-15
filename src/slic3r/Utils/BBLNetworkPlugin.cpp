@@ -7,7 +7,6 @@
 #include <boost/log/trivial.hpp>
 #include <boost/format.hpp>
 #include <boost/filesystem.hpp>
-#include <filesystem>
 #include "libslic3r/Utils.hpp"
 #include "slic3r/Utils/FileTransferUtils.hpp"
 
@@ -18,6 +17,81 @@
 namespace Slic3r {
 
 #define BAMBU_SOURCE_LIBRARY "BambuSource"
+
+namespace {
+
+void set_bridge_preflight_reason(std::string* detail, const std::string& value)
+{
+    if (detail)
+        *detail = value;
+}
+
+bool bridge_payload_preflight(const boost::filesystem::path& plugin_folder, std::string* detail)
+{
+    const std::string required_files[] = {
+        Slic3r::PJarczakLinuxBridge::bridge_network_current_dir_name(),
+        Slic3r::PJarczakLinuxBridge::host_executable_file_name(),
+        "pjarczak_bambu_linux_host_abi1",
+        "pjarczak_bambu_linux_host_abi0",
+        Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_plugin_cache_subdir_file_name(),
+        Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+        Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
+        "ca-certificates.crt",
+        "slicer_base64.cer"
+    };
+
+    for (const auto& file_name : required_files) {
+        const auto candidate = plugin_folder / file_name;
+        if (!boost::filesystem::exists(candidate) || boost::filesystem::is_directory(candidate)) {
+            set_bridge_preflight_reason(detail, "missing required bridge runtime file: " + file_name);
+            return false;
+        }
+    }
+
+    for (const auto& file_name : {
+            Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+            Slic3r::PJarczakLinuxBridge::linux_source_library_name()}) {
+        std::string validate_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_file((plugin_folder / file_name).string(), &validate_reason)) {
+            set_bridge_preflight_reason(detail, file_name + ": " + validate_reason);
+            return false;
+        }
+    }
+
+    const auto manifest = plugin_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name();
+    if (boost::filesystem::exists(manifest) && !boost::filesystem::is_directory(manifest)) {
+        std::string manifest_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_set_against_manifest(plugin_folder, &manifest_reason)) {
+            set_bridge_preflight_reason(detail, "linux payload manifest validation failed: " + manifest_reason);
+            return false;
+        }
+    }
+
+    set_bridge_preflight_reason(detail, "ok");
+    return true;
+}
+
+std::string list_bridge_plugin_dir_files(const boost::filesystem::path& plugin_folder)
+{
+    std::string out;
+    try {
+        for (auto& dir_entry : boost::filesystem::directory_iterator(plugin_folder)) {
+            if (!boost::filesystem::is_regular_file(dir_entry.path()))
+                continue;
+            if (!out.empty())
+                out += ", ";
+            out += dir_entry.path().filename().string();
+        }
+    } catch (...) {}
+    return out;
+}
+
+} // namespace
 
 // ============================================================================
 // Singleton Implementation
@@ -79,6 +153,17 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         setenv("PJARCZAK_BAMBU_PLUGIN_DIR", plugin_folder.string().c_str(), 1);
         setenv("PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION", version.c_str(), 1);
 #endif
+        std::string preflight_reason;
+        if (!bridge_payload_preflight(plugin_folder, &preflight_reason)) {
+            BOOST_LOG_TRIVIAL(error) << "BBLNetworkPlugin::initialize: bridge payload preflight failed: " << preflight_reason;
+            BOOST_LOG_TRIVIAL(info) << "BBLNetworkPlugin::initialize: plugin dir files: " << list_bridge_plugin_dir_files(plugin_folder);
+            set_load_error(
+                "Linux bridge payload not ready",
+                preflight_reason,
+                plugin_folder.string()
+            );
+            return -1;
+        }
     }
 
     if (version.empty()) {
@@ -93,7 +178,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
 
 #if defined(_MSC_VER) || defined(_WIN32)
     if (pj_bridge) {
-        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(std::filesystem::path(plugin_folder.string()));
+        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(plugin_folder);
         wchar_t lib_wstr[512];
         memset(lib_wstr, 0, sizeof(lib_wstr));
         ::MultiByteToWideChar(CP_UTF8, 0, library.c_str(), int(library.size()) + 1, lib_wstr, int(sizeof(lib_wstr) / sizeof(lib_wstr[0])));
@@ -121,7 +206,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
     }
 #else
     if (pj_bridge) {
-        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(std::filesystem::path(plugin_folder.string()));
+        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(plugin_folder);
         m_networking_module = dlopen(library.c_str(), RTLD_LAZY);
     } else {
     #if defined(__WXMAC__)

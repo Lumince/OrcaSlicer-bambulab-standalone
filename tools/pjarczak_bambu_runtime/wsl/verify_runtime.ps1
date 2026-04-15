@@ -123,7 +123,7 @@ if ([string]::IsNullOrWhiteSpace($PluginCacheDir)) {
             }
         }
         if ([string]::IsNullOrWhiteSpace($PluginCacheDir) -and $env:APPDATA) {
-            $PluginCacheDir = Join-Path $env:APPDATA 'OrcaSlicer\ota\plugins'
+            $PluginCacheDir = Join-Path $env:APPDATA 'OrcaSlicer\ota'
         }
     }
 }

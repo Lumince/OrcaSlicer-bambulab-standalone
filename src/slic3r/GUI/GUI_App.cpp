@@ -2979,6 +2979,13 @@ bool GUI_App::on_init_inner()
         }
     } */
     copy_network_if_available();
+#ifdef WIN32
+    if (Slic3r::PJarczakLinuxBridge::enabled()) {
+        const boost::filesystem::path plugin_folder = boost::filesystem::path(data_dir()) / "plugins";
+        const boost::filesystem::path plugin_cache_dir = boost::filesystem::path(data_dir()) / "ota";
+        pjarczak_verify_or_install_windows_bridge_runtime(plugin_folder, plugin_cache_dir);
+    }
+#endif
     on_init_network();
 
     if (m_agent && m_agent->is_user_login()) {
@@ -3169,6 +3176,85 @@ static const char* pjarczak_legacy_bootstrap_script_name()
     return "pjarczak-wsl-run-host.sh";
 }
 
+static wxString pjarczak_quote_windows_arg(const wxString& value)
+{
+    wxString escaped = value;
+    escaped.Replace("\"", "\\\"");
+    return wxString::Format("\"%s\"", escaped);
+}
+
+static long pjarczak_run_hidden_windows_command(const wxString& command, wxArrayString* stdout_lines, wxArrayString* stderr_lines)
+{
+#ifdef WIN32
+    return wxExecute(command, stdout_lines, stderr_lines, wxEXEC_SYNC | wxEXEC_HIDE_CONSOLE);
+#else
+    (void)command;
+    (void)stdout_lines;
+    (void)stderr_lines;
+    return -1;
+#endif
+}
+
+static void pjarczak_log_command_output(const char* tag, long exit_code, const wxArrayString& stdout_lines, const wxArrayString& stderr_lines)
+{
+    BOOST_LOG_TRIVIAL(info) << tag << ": exit_code=" << exit_code;
+    for (const auto& line : stdout_lines)
+        BOOST_LOG_TRIVIAL(info) << tag << " [stdout] " << into_u8(line);
+    for (const auto& line : stderr_lines)
+        BOOST_LOG_TRIVIAL(error) << tag << " [stderr] " << into_u8(line);
+}
+
+static void pjarczak_verify_or_install_windows_bridge_runtime(const boost::filesystem::path& plugin_folder,
+                                                              const boost::filesystem::path& plugin_cache_dir)
+{
+#ifndef WIN32
+    (void)plugin_folder;
+    (void)plugin_cache_dir;
+#else
+    if (!Slic3r::PJarczakLinuxBridge::enabled())
+        return;
+
+    const auto verify_script = plugin_folder / Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name();
+    const auto install_script = plugin_folder / Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name();
+    if (!boost::filesystem::exists(verify_script) || !boost::filesystem::exists(install_script)) {
+        BOOST_LOG_TRIVIAL(warning) << "[pjarczak_runtime_setup] missing verify/install script in " << plugin_folder.string();
+        return;
+    }
+
+    const wxString plugin_dir_wx = from_u8(plugin_folder.string());
+    const wxString cache_dir_wx = from_u8(plugin_cache_dir.string());
+    const wxString verify_cmd = wxString::Format(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File %s -PackageDir %s -PluginCacheDir %s -AllowMissingLinuxPlugin",
+        pjarczak_quote_windows_arg(from_u8(verify_script.string())),
+        pjarczak_quote_windows_arg(plugin_dir_wx),
+        pjarczak_quote_windows_arg(cache_dir_wx));
+
+    wxArrayString verify_out;
+    wxArrayString verify_err;
+    long verify_code = pjarczak_run_hidden_windows_command(verify_cmd, &verify_out, &verify_err);
+    pjarczak_log_command_output("[pjarczak_runtime_verify]", verify_code, verify_out, verify_err);
+    if (verify_code == 0)
+        return;
+
+    const wxString install_cmd = wxString::Format(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File %s -PackageDir %s -PluginDir %s -PluginCacheDir %s",
+        pjarczak_quote_windows_arg(from_u8(install_script.string())),
+        pjarczak_quote_windows_arg(plugin_dir_wx),
+        pjarczak_quote_windows_arg(plugin_dir_wx),
+        pjarczak_quote_windows_arg(cache_dir_wx));
+
+    wxArrayString install_out;
+    wxArrayString install_err;
+    long install_code = pjarczak_run_hidden_windows_command(install_cmd, &install_out, &install_err);
+    pjarczak_log_command_output("[pjarczak_runtime_install]", install_code, install_out, install_err);
+
+    verify_out.clear();
+    verify_err.clear();
+    verify_code = pjarczak_run_hidden_windows_command(verify_cmd, &verify_out, &verify_err);
+    pjarczak_log_command_output("[pjarczak_runtime_verify_after_install]", verify_code, verify_out, verify_err);
+#endif
+}
+
 bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder, std::string* reason)
 {
     if (!Slic3r::PJarczakLinuxBridge::enabled()) {
@@ -3184,12 +3270,16 @@ bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder,
     const std::string required_files[] = {
         Slic3r::PJarczakLinuxBridge::bridge_network_current_dir_name(),
         Slic3r::PJarczakLinuxBridge::host_executable_file_name(),
+        std::string("pjarczak_bambu_linux_host_abi1"),
+        std::string("pjarczak_bambu_linux_host_abi0"),
         Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
         Slic3r::PJarczakLinuxBridge::windows_plugin_cache_subdir_file_name(),
         Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
-        Slic3r::PJarczakLinuxBridge::linux_source_library_name()
+        Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
+        std::string("ca-certificates.crt"),
+        std::string("slicer_base64.cer")
     };
 
     for (const std::string& file_name : required_files) {
@@ -3300,31 +3390,35 @@ void pjarczak_copy_local_overlay_runtime(const boost::filesystem::path& plugin_f
         "assemble_windows_runtime_bundle.ps1"
     };
 
-    for (const std::string& file_name : helper_files)
-        pjarczak_copy_runtime_file_if_exists(exe_dir, plugin_folder, file_name);
+    const boost::filesystem::path candidate_dirs[] = {
+        exe_dir,
+        exe_dir / "plugins"
+    };
 
-    try {
-        for (auto& dir_entry : boost::filesystem::directory_iterator(exe_dir)) {
-            if (!boost::filesystem::is_regular_file(dir_entry.path()))
-                continue;
-            const std::string file_name = dir_entry.path().filename().string();
-            if (!Slic3r::PJarczakLinuxBridge::is_overlay_runtime_filename(file_name))
-                continue;
-            pjarczak_copy_runtime_file_if_exists(exe_dir, plugin_folder, file_name);
-        }
-    } catch (...) {}
+    for (const auto& candidate_dir : candidate_dirs) {
+        if (!boost::filesystem::exists(candidate_dir) || !boost::filesystem::is_directory(candidate_dir))
+            continue;
 
-    const auto legacy_runtime_dst_dir = plugin_folder / "pjarczak_bambu_linux_host.runtime";
-    if (boost::filesystem::exists(legacy_runtime_dst_dir) && boost::filesystem::is_directory(legacy_runtime_dst_dir)) {
+        for (const std::string& file_name : helper_files)
+            pjarczak_copy_runtime_file_if_exists(candidate_dir, plugin_folder, file_name);
+
         try {
-            boost::filesystem::remove_all(legacy_runtime_dst_dir);
-        } catch (const std::exception& e) {
-            BOOST_LOG_TRIVIAL(error) << "[copy_network_if_available] remove legacy runtime dir failed: "
-                                     << legacy_runtime_dst_dir.string() << ", err=" << e.what();
-        } catch (...) {
-            BOOST_LOG_TRIVIAL(error) << "[copy_network_if_available] remove legacy runtime dir failed: "
-                                     << legacy_runtime_dst_dir.string() << ", unknown error";
-        }
+            for (auto& dir_entry : boost::filesystem::directory_iterator(candidate_dir)) {
+                if (!boost::filesystem::is_regular_file(dir_entry.path()))
+                    continue;
+                const std::string file_name = dir_entry.path().filename().string();
+                if (!Slic3r::PJarczakLinuxBridge::is_overlay_runtime_filename(file_name))
+                    continue;
+                pjarczak_copy_runtime_file_if_exists(candidate_dir, plugin_folder, file_name);
+            }
+        } catch (...) {}
+    }
+
+    const auto runtime_dst_dir = plugin_folder / "pjarczak_bambu_linux_host.runtime";
+    if (boost::filesystem::exists(runtime_dst_dir) && boost::filesystem::is_directory(runtime_dst_dir)) {
+        try {
+            boost::filesystem::remove_all(runtime_dst_dir);
+        } catch (...) {}
     }
 }
 
@@ -3372,8 +3466,12 @@ void GUI_App::copy_network_if_available()
 
     if (pj_force_linux_payload) {
         if (!boost::filesystem::exists(cache_folder)) {
-            app_config->set("update_network_plugin", "false");
-            return;
+            try {
+                boost::filesystem::create_directories(cache_folder);
+            } catch (...) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to create linux payload cache folder: " << cache_folder.string();
+                return;
+            }
         }
 
         bool copy_failed = false;
@@ -3511,6 +3609,18 @@ bool GUI_App::on_init_network(bool try_backup)
     if (should_load_networking_plugin) {
         if (config_version.empty()) {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": no version configured, need to download";
+            mark_networking_need_update();
+
+            if (!m_device_manager)
+                m_device_manager = new Slic3r::DeviceManager();
+            if (!m_user_manager)
+                m_user_manager = new Slic3r::UserManager();
+
+            return false;
+        }
+
+        if (bridge_mode && !bridge_payload_ready) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": skipping bridge DLL load because payload/runtime is not ready, reason=" << bridge_payload_reason;
             mark_networking_need_update();
 
             if (!m_device_manager)
