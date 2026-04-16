@@ -1486,16 +1486,26 @@ std::pair<PresetsConfigSubstitutions, std::string> PresetBundle::load_system_pre
             continue;
 
         try {
+            boost::filesystem::path vendor_root_dir = dir;
+            if (!validation_mode && vendor_name == ORCA_FILAMENT_LIBRARY) {
+                const boost::filesystem::path resources_profiles_dir = (boost::filesystem::path(resources_dir()) / "profiles").make_preferred();
+                if (boost::filesystem::exists(resources_profiles_dir / (vendor_name + ".json")) &&
+                    boost::filesystem::exists(resources_profiles_dir / vendor_name)) {
+                    vendor_root_dir = resources_profiles_dir;
+                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": load OrcaFilamentLibrary from resources: " << vendor_root_dir.string();
+                }
+            }
+
             // Load the config bundle, flatten it.
             if (first) {
                 // Reset this PresetBundle and load the first vendor config.
-                append(substitutions, this->load_vendor_configs_from_json(dir.string(), vendor_name, PresetBundle::LoadSystem, compatibility_rule).first);
+                append(substitutions, this->load_vendor_configs_from_json(vendor_root_dir.string(), vendor_name, PresetBundle::LoadSystem, compatibility_rule).first);
                 first = false;
             } else {
                 // Load the other vendor configs, merge them with this PresetBundle.
                 // Report duplicate profiles.
                 PresetBundle other;
-                append(substitutions, other.load_vendor_configs_from_json(dir.string(), vendor_name, PresetBundle::LoadSystem, compatibility_rule, this).first);
+                append(substitutions, other.load_vendor_configs_from_json(vendor_root_dir.string(), vendor_name, PresetBundle::LoadSystem, compatibility_rule, this).first);
                 std::vector<std::string> duplicates = this->merge_presets(std::move(other));
                 if (!duplicates.empty()) {
                     errors_cummulative += "Found duplicated settings in vendor " + vendor_name + "'s json file lists: ";

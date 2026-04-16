@@ -1,7 +1,7 @@
 {
     "type": "filament",
-    "name": "COEX NYLEX PA6-CF @System",
-    "inherits": "COEX NYLEX PA6-CF @base",
+    "name": "COEX NYLEX UNFILLED @System",
+    "inherits": "COEX NYLEX UNFILLED @base",
     "from": "system",
     "setting_id": "CXPAUN21",
     "instantiation": "true",
