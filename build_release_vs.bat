@@ -280,4 +280,46 @@ if errorlevel 1 (
     exit /b 1
 )
 
+copy /Y "%WP%\tools\pjarczak_bambu_runtime\wsl\pjarczak_wsl_run_host.sh" "%INSTALL_DIR%\pjarczak_wsl_run_host.sh" >nul
+if errorlevel 1 (
+    echo Failed to copy pjarczak_wsl_run_host.sh into %INSTALL_DIR%
+    exit /b 1
+)
+
+copy /Y "%WP%\tools\pjarczak_bambu_runtime\wsl\install_runtime.ps1" "%INSTALL_DIR%\install_runtime.ps1" >nul
+if errorlevel 1 (
+    echo Failed to copy install_runtime.ps1 into %INSTALL_DIR%
+    exit /b 1
+)
+
+copy /Y "%WP%\tools\pjarczak_bambu_runtime\wsl\install_runtime.cmd" "%INSTALL_DIR%\install_runtime.cmd" >nul
+if errorlevel 1 (
+    echo Failed to copy install_runtime.cmd into %INSTALL_DIR%
+    exit /b 1
+)
+
+copy /Y "%WP%\tools\pjarczak_bambu_runtime\wsl\verify_runtime.ps1" "%INSTALL_DIR%\verify_runtime.ps1" >nul
+if errorlevel 1 (
+    echo Failed to copy verify_runtime.ps1 into %INSTALL_DIR%
+    exit /b 1
+)
+
+copy /Y "%WP%\tools\pjarczak_bambu_runtime\wsl\pjarczak_wsl_distro.txt" "%INSTALL_DIR%\pjarczak_wsl_distro.txt" >nul
+if errorlevel 1 (
+    echo Failed to copy pjarczak_wsl_distro.txt into %INSTALL_DIR%
+    exit /b 1
+)
+
+copy /Y "%WP%\tools\pjarczak_bambu_runtime\wsl\pjarczak_plugin_cache_subdir.txt" "%INSTALL_DIR%\pjarczak_plugin_cache_subdir.txt" >nul
+if errorlevel 1 (
+    echo Failed to copy pjarczak_plugin_cache_subdir.txt into %INSTALL_DIR%
+    exit /b 1
+)
+
+copy /Y "%WP%\tools\pjarczak_bambu_runtime\release\assemble_windows_runtime_bundle.ps1" "%INSTALL_DIR%\assemble_windows_runtime_bundle.ps1" >nul
+if errorlevel 1 (
+    echo Failed to copy assemble_windows_runtime_bundle.ps1 into %INSTALL_DIR%
+    exit /b 1
+)
+
 exit /b 0

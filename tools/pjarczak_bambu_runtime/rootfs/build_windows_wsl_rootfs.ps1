@@ -1,6 +1,6 @@
 param(
     [string]$OutputTar = "",
-    [string]$BaseImage = "ubuntu:22.04",
+    [string]$BaseImage = "ubuntu:24.04",
     [switch]$Force
 )
 

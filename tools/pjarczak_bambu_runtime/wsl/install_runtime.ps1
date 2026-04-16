@@ -71,6 +71,30 @@ function Resolve-DistroName([string]$Dir, [string]$Current) {
     return 'PJARCZAK-BAMBU'
 }
 
+function Get-FileSha256([string]$Path) {
+    return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+}
+
+function Get-RootFsHashMarkerPath([string]$Dir) {
+    return (Join-Path $Dir 'pjarczak-rootfs-sha256.txt')
+}
+
+function Write-RootFsHashMarker([string]$Dir, [string]$Hash) {
+    if ([string]::IsNullOrWhiteSpace($Dir) -or [string]::IsNullOrWhiteSpace($Hash)) {
+        return
+    }
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    Set-Content -Path (Get-RootFsHashMarkerPath $Dir) -Value ($Hash.Trim().ToLowerInvariant()) -NoNewline
+}
+
+function Read-RootFsHashMarker([string]$Dir) {
+    $path = Get-RootFsHashMarkerPath $Dir
+    if (!(Test-Path $path)) {
+        return ''
+    }
+    return ((Get-Content $path -Raw).Trim().ToLowerInvariant())
+}
+
 
 function Resolve-PluginCacheDir([string]$Dir) {
     if ($env:PJARCZAK_BAMBU_WINDOWS_PLUGIN_CACHE_DIR) {
@@ -209,8 +233,19 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Failed to query installed WSL distros'
 }
 
+$rootFsTar = Join-Path $PackageDir 'windows-wsl2-rootfs.tar'
+$currentRootFsHash = Get-FileSha256 $rootFsTar
+$storedRootFsHash = Read-RootFsHashMarker $InstallDir
+
 $alreadyInstalled = $distroList | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq $DistroName }
 if ($alreadyInstalled) {
+    if (-not $ReplaceExisting) {
+        if ([string]::IsNullOrWhiteSpace($storedRootFsHash) -or $storedRootFsHash -ne $currentRootFsHash) {
+            Write-Host "WSL rootfs changed or marker missing - reinstalling distro $DistroName"
+            $ReplaceExisting = $true
+        }
+    }
+
     if ($ReplaceExisting) {
         & $wsl --terminate $DistroName 2>$null | Out-Null
         & $wsl --unregister $DistroName
@@ -224,7 +259,6 @@ if ($alreadyInstalled) {
 if (-not $alreadyInstalled) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-    $rootFsTar = Join-Path $PackageDir 'windows-wsl2-rootfs.tar'
     & $wsl --import $DistroName $InstallDir $rootFsTar --version 2
     if ($LASTEXITCODE -ne 0) {
         throw "wsl --import failed for distro '$DistroName'"
@@ -257,6 +291,10 @@ mkdir -p /root/.pjarczak-bambu-runtime
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to terminate distro '$DistroName' after initialization"
     }
+
+    Write-RootFsHashMarker $InstallDir $currentRootFsHash
+} elseif ($storedRootFsHash -ne $currentRootFsHash) {
+    Write-RootFsHashMarker $InstallDir $currentRootFsHash
 }
 
 $verifyArgs = @(

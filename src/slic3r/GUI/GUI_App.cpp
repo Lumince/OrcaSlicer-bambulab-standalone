@@ -3436,14 +3436,19 @@ void pjarczak_copy_local_overlay_runtime(const boost::filesystem::path& plugin_f
 
 void GUI_App::copy_network_if_available()
 {
-    if (app_config->get("update_network_plugin") != "true")
-        return;
-
     std::string data_dir_str = data_dir();
     boost::filesystem::path data_dir_path(data_dir_str);
     auto plugin_folder = data_dir_path / "plugins";
     auto cache_folder = data_dir_path / "ota";
     std::string changelog_file = cache_folder.string() + "/network_plugins.json";
+
+    if (!boost::filesystem::exists(plugin_folder))
+        boost::filesystem::create_directory(plugin_folder);
+
+    pjarczak_copy_local_overlay_runtime(plugin_folder);
+
+    if (app_config->get("update_network_plugin") != "true")
+        return;
 
     std::string cached_version;
     if (boost::filesystem::exists(changelog_file)) {
@@ -3455,11 +3460,6 @@ void GUI_App::copy_network_if_available()
                 cached_version = j["version"];
         } catch (nlohmann::detail::parse_error&) {}
     }
-
-    if (!boost::filesystem::exists(plugin_folder))
-        boost::filesystem::create_directory(plugin_folder);
-
-    pjarczak_copy_local_overlay_runtime(plugin_folder);
 
     const bool pj_force_linux_payload = Slic3r::PJarczakLinuxBridge::enabled();
     std::string error_message;
