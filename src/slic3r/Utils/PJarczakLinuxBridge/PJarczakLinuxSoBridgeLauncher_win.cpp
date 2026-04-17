@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -63,37 +63,179 @@ std::string trim_ascii(std::string value)
     return value;
 }
 
-std::string quote_cmd_arg(const std::string& value)
+std::string normalize_native_text(std::string value)
 {
-    std::string out = "\"";
-    for (const char ch : value) {
-        if (ch == '"')
-            out += "\\\"";
-        else
+    value.erase(std::remove(value.begin(), value.end(), '\0'), value.end());
+
+    std::string out;
+    out.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        const char ch = value[i];
+        if (ch == '\r') {
+            if (i + 1 < value.size() && value[i + 1] == '\n')
+                continue;
+            out.push_back('\n');
+        } else {
             out.push_back(ch);
+        }
     }
-    out.push_back('"');
+    return trim_ascii(out);
+}
+
+std::string decode_text_auto(const std::vector<char>& bytes)
+{
+    if (bytes.empty())
+        return {};
+
+    auto from_utf16le = [&](size_t offset) {
+        const size_t wchar_count = (bytes.size() - offset) / 2;
+        std::wstring ws(wchar_count, L'\0');
+        if (wchar_count > 0)
+            std::memcpy(ws.data(), bytes.data() + offset, wchar_count * sizeof(wchar_t));
+        return normalize_native_text(narrow(ws));
+    };
+
+    if (bytes.size() >= 2) {
+        const unsigned char b0 = static_cast<unsigned char>(bytes[0]);
+        const unsigned char b1 = static_cast<unsigned char>(bytes[1]);
+        if (b0 == 0xFFu && b1 == 0xFEu)
+            return from_utf16le(2);
+        if (b0 == 0xFEu && b1 == 0xFFu) {
+            std::wstring ws;
+            ws.reserve((bytes.size() - 2) / 2);
+            for (size_t i = 2; i + 1 < bytes.size(); i += 2) {
+                wchar_t ch = static_cast<wchar_t>((static_cast<unsigned char>(bytes[i]) << 8) | static_cast<unsigned char>(bytes[i + 1]));
+                ws.push_back(ch);
+            }
+            return normalize_native_text(narrow(ws));
+        }
+    }
+
+    if (bytes.size() >= 3 &&
+        static_cast<unsigned char>(bytes[0]) == 0xEFu &&
+        static_cast<unsigned char>(bytes[1]) == 0xBBu &&
+        static_cast<unsigned char>(bytes[2]) == 0xBFu)
+        return normalize_native_text(std::string(bytes.begin() + 3, bytes.end()));
+
+    for (size_t i = 1; i < std::min<size_t>(bytes.size(), 64); i += 2) {
+        if (bytes[i] == '\0')
+            return from_utf16le(0);
+    }
+
+    return normalize_native_text(std::string(bytes.begin(), bytes.end()));
+}
+
+std::wstring quote_windows_arg(const std::wstring& value)
+{
+    if (value.empty())
+        return L"\"\"";
+
+    const bool needs_quotes = value.find_first_of(L" \t\n\v\"") != std::wstring::npos;
+    if (!needs_quotes)
+        return value;
+
+    std::wstring out;
+    out.push_back(L'"');
+    size_t backslashes = 0;
+    for (wchar_t ch : value) {
+        if (ch == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (ch == L'"') {
+            out.append(backslashes * 2 + 1, L'\\');
+            out.push_back(L'"');
+            backslashes = 0;
+            continue;
+        }
+        if (backslashes != 0) {
+            out.append(backslashes, L'\\');
+            backslashes = 0;
+        }
+        out.push_back(ch);
+    }
+    if (backslashes != 0)
+        out.append(backslashes * 2, L'\\');
+    out.push_back(L'"');
     return out;
 }
 
-std::string run_and_capture(const std::string& command, DWORD* exit_code = nullptr)
+std::string run_and_capture(const std::wstring& exe_path, const std::vector<std::wstring>& args, DWORD* exit_code = nullptr)
 {
-    std::string output;
-    FILE* pipe = _popen(command.c_str(), "r");
-    if (!pipe) {
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    if (!::CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
         if (exit_code)
             *exit_code = static_cast<DWORD>(-1);
-        return output;
+        return {};
     }
 
-    char buffer[4096];
-    while (std::fgets(buffer, static_cast<int>(sizeof(buffer)), pipe))
-        output += buffer;
+    ::SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
 
-    const int rc = _pclose(pipe);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = write_pipe;
+    si.hStdError = write_pipe;
+
+    PROCESS_INFORMATION pi{};
+
+    std::wstring command_line = quote_windows_arg(exe_path);
+    for (const std::wstring& arg : args) {
+        command_line.push_back(L' ');
+        command_line += quote_windows_arg(arg);
+    }
+
+    std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back(L'\0');
+
+    const BOOL ok = ::CreateProcessW(exe_path.c_str(),
+                                     mutable_command.data(),
+                                     nullptr,
+                                     nullptr,
+                                     TRUE,
+                                     CREATE_NO_WINDOW,
+                                     nullptr,
+                                     nullptr,
+                                     &si,
+                                     &pi);
+
+    ::CloseHandle(write_pipe);
+    write_pipe = nullptr;
+
+    if (!ok) {
+        ::CloseHandle(read_pipe);
+        if (exit_code)
+            *exit_code = static_cast<DWORD>(-1);
+        return {};
+    }
+
+    std::vector<char> bytes;
+    std::array<char, 4096> buffer{};
+    for (;;) {
+        DWORD read = 0;
+        if (!::ReadFile(read_pipe, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) || read == 0)
+            break;
+        bytes.insert(bytes.end(), buffer.data(), buffer.data() + read);
+    }
+
+    ::WaitForSingleObject(pi.hProcess, INFINITE);
+
+    DWORD process_exit = static_cast<DWORD>(-1);
+    ::GetExitCodeProcess(pi.hProcess, &process_exit);
+
+    ::CloseHandle(read_pipe);
+    ::CloseHandle(pi.hThread);
+    ::CloseHandle(pi.hProcess);
+
     if (exit_code)
-        *exit_code = rc < 0 ? static_cast<DWORD>(-1) : static_cast<DWORD>(rc);
-    return output;
+        *exit_code = process_exit;
+    return decode_text_auto(bytes);
 }
 
 DWORD run_powershell_wait(const std::filesystem::path& script_path,
@@ -226,7 +368,7 @@ std::filesystem::path resolve_bootstrap_script_path(const std::filesystem::path&
 
 std::string first_missing_runtime_file(const std::filesystem::path& plugin_dir)
 {
-    const std::array<std::string, 8> required_files = {{
+    const std::array<std::string, 10> required_files = {{
         host_executable_file_name(),
         std::string("pjarczak_bambu_linux_host_abi1"),
         std::string("pjarczak_bambu_linux_host_abi0"),
@@ -234,7 +376,9 @@ std::string first_missing_runtime_file(const std::filesystem::path& plugin_dir)
         windows_wsl_validate_script_file_name(),
         windows_wsl_distro_file_name(),
         windows_wsl_rootfs_file_name(),
-        windows_plugin_cache_subdir_file_name()
+        windows_plugin_cache_subdir_file_name(),
+        std::string("ca-certificates.crt"),
+        std::string("slicer_base64.cer")
     }};
 
     for (const std::string& name : required_files) {
@@ -257,8 +401,10 @@ bool probe_wsl_ready(const std::string& distro, std::string* reason)
         return false;
     }
 
+    const std::wstring wsl_w = widen(wsl);
+
     DWORD status_code = 0;
-    const std::string status_out = run_and_capture(quote_cmd_arg(wsl) + " --status 2>&1", &status_code);
+    const std::string status_out = run_and_capture(wsl_w, {L"--status"}, &status_code);
     if (status_code != 0) {
         if (reason)
             *reason = trim_ascii(status_out.empty() ? "wsl --status failed" : status_out);
@@ -271,14 +417,8 @@ bool probe_wsl_ready(const std::string& distro, std::string* reason)
         return true;
     }
 
-    const std::string probe_cmd =
-        quote_cmd_arg(wsl) +
-        " -d " + quote_cmd_arg(distro) +
-        " --user root -- sh -lc " + quote_cmd_arg("true") +
-        " 2>&1";
-
     DWORD probe_code = 0;
-    const std::string probe_out = run_and_capture(probe_cmd, &probe_code);
+    const std::string probe_out = run_and_capture(wsl_w, {L"-d", widen(distro), L"--user", L"root", L"--", L"sh", L"-lc", L"true"}, &probe_code);
     if (probe_code == 0) {
         if (reason)
             reason->clear();

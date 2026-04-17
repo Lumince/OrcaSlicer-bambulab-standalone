@@ -177,7 +177,9 @@ $requiredFiles = @(
     'pjarczak_bambu_linux_host',
     'pjarczak_bambu_linux_host_abi1',
     'pjarczak_bambu_linux_host_abi0',
-    'windows-wsl2-rootfs.tar'
+    'windows-wsl2-rootfs.tar',
+    'ca-certificates.crt',
+    'slicer_base64.cer'
 )
 
 foreach ($name in $requiredFiles) {

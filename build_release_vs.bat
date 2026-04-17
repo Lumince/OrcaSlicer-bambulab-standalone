@@ -151,8 +151,8 @@ if errorlevel 1 exit /b 1
 
 :done
 @echo off
-for /f "tokens=1-3 delims=:.," %%a in ("%_START_TIME: =0%") do set /a "_start_s=%%a*3600+%%b*60+%%c"
-for /f "tokens=1-3 delims=:.," %%a in ("%TIME: =0%") do set /a "_end_s=%%a*3600+%%b*60+%%c"
+for /f "tokens=1-3 delims=:.," %%a in ("%_START_TIME: =0%") do set /a "_start_s=(1%%a-100)*3600 + (1%%b-100)*60 + (1%%c-100)"
+for /f "tokens=1-3 delims=:.," %%a in ("%TIME: =0%") do set /a "_end_s=(1%%a-100)*3600 + (1%%b-100)*60 + (1%%c-100)"
 set /a "_elapsed=_end_s - _start_s"
 if %_elapsed% lss 0 set /a "_elapsed+=86400"
 set /a "_hours=_elapsed / 3600"

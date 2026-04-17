@@ -114,16 +114,72 @@ function Resolve-PluginCacheDir([string]$Dir) {
     return [System.IO.Path]::GetFullPath((Join-Path $env:APPDATA 'OrcaSlicer\ota'))
 }
 
-function Test-WslDistroExists([string]$WslPath, [string]$Name, [ref]$Reason) {
-    $probe = & $WslPath -d $Name --user root -- sh -lc 'true' 2>&1
-    $code = $LASTEXITCODE
+function Read-TextAuto([string]$Path) {
+    if (!(Test-Path $Path)) {
+        return ''
+    }
 
-    if ($code -eq 0) {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -eq 0) {
+        return ''
+    }
+
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        return ([System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2) -replace "`0", '')
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
+        return ([System.Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2) -replace "`0", '')
+    }
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return ([System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3) -replace "`0", '')
+    }
+
+    for ($i = 1; $i -lt [Math]::Min($bytes.Length, 64); $i += 2) {
+        if ($bytes[$i] -eq 0) {
+            return ([System.Text.Encoding]::Unicode.GetString($bytes) -replace "`0", '')
+        }
+    }
+
+    return ([System.Text.Encoding]::UTF8.GetString($bytes) -replace "`0", '')
+}
+
+function Normalize-NativeText([string]$Text) {
+    if ([string]::IsNullOrEmpty($Text)) {
+        return ''
+    }
+    $value = $Text -replace "`0", ''
+    $value = $value -replace "`r`n", "`n"
+    $value = $value -replace "`r", "`n"
+    return $value
+}
+
+function Invoke-NativeCapture([string]$FilePath, [string[]]$ArgumentList) {
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden
+        $stdoutText = if (Test-Path $stdoutPath) { Normalize-NativeText (Read-TextAuto $stdoutPath) } else { '' }
+        $stderrText = if (Test-Path $stderrPath) { Normalize-NativeText (Read-TextAuto $stderrPath) } else { '' }
+        $combined = (($stdoutText + "`n" + $stderrText).Trim())
+        return @{
+            ExitCode = $proc.ExitCode
+            StdOut = $stdoutText
+            StdErr = $stderrText
+            Combined = $combined
+        }
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $stdoutPath, $stderrPath
+    }
+}
+
+function Test-WslDistroExists([string]$WslPath, [string]$Name, [ref]$Reason) {
+    $probe = Invoke-NativeCapture $WslPath @('-d', $Name, '--user', 'root', '--', 'sh', '-lc', 'true')
+    if ($probe.ExitCode -eq 0) {
         $Reason.Value = ''
         return $true
     }
 
-    $text = ($probe | Out-String).Trim()
+    $text = $probe.Combined
     $lower = $text.ToLowerInvariant()
 
     if ($lower.Contains('there is no distribution with the supplied name') -or
@@ -230,7 +286,9 @@ $requiredFiles = @(
     'pjarczak_wsl_distro.txt',
     'install_runtime.ps1',
     'verify_runtime.ps1',
-    'windows-wsl2-rootfs.tar'
+    'windows-wsl2-rootfs.tar',
+    'ca-certificates.crt',
+    'slicer_base64.cer'
 )
 
 foreach ($name in $requiredFiles) {
@@ -353,4 +411,3 @@ Write-Host "WSL runtime installed to: $PackageDir"
 Write-Host "WSL distro: $DistroName"
 Write-Host "WSL install dir: $InstallDir"
 Write-Host 'Now start OrcaSlicer.'
-Write-Host 'On first run let it download bambunetwork, close the app completely, then start it again.'
