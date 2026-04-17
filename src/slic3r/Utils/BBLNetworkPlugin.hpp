@@ -408,7 +408,7 @@ private:
     NetworkLibraryLoadError m_load_error;
 
     // Legacy network compatibility flag
-    bool m_use_legacy_network{true};
+    bool m_use_legacy_network{false};
 
     // Function pointers
     func_check_debug_consistent m_check_debug_consistent{nullptr};

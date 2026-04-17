@@ -1192,15 +1192,7 @@ std::string GUI_App::get_plugin_url(std::string name, std::string country_code)
 {
     std::string url = get_http_url(country_code);
 
-    std::string curr_version;
-    if (NetworkAgent::use_legacy_network) {
-        curr_version = BAMBU_NETWORK_AGENT_VERSION_LEGACY;
-    } else if (name == "plugins" && app_config) {
-        std::string user_version = app_config->get_network_plugin_version();
-        curr_version = user_version.empty() ? get_latest_network_version() : user_version;
-    } else {
-        curr_version = get_latest_network_version();
-    }
+    std::string curr_version = get_latest_network_version();
 
     std::string using_version = curr_version.substr(0, 9) + "00";
     if (name == "cameratools")
@@ -1830,15 +1822,7 @@ bool GUI_App::check_networking_version()
         BOOST_LOG_TRIVIAL(info) << "get_network_agent_version=" << network_ver;
     }
 
-    std::string studio_ver;
-    if (NetworkAgent::use_legacy_network) {
-        studio_ver = BAMBU_NETWORK_AGENT_VERSION_LEGACY;
-    } else if (app_config) {
-        std::string user_version = app_config->get_network_plugin_version();
-        studio_ver = user_version.empty() ? get_latest_network_version() : user_version;
-    } else {
-        studio_ver = get_latest_network_version();
-    }
+    std::string studio_ver = get_latest_network_version();
 
     BOOST_LOG_TRIVIAL(info) << "check_networking_version: network_ver=" << network_ver << ", expected=" << studio_ver;
 
@@ -2961,10 +2945,17 @@ bool GUI_App::on_init_inner()
     Slic3r::Http::set_extra_headers(extra_headers);
 
     // Orca: select network plugin version based on configured version string
-    std::string configured_version = app_config->get_network_plugin_version();
-    NetworkAgent::use_legacy_network = (configured_version == BAMBU_NETWORK_AGENT_VERSION_LEGACY);
-    BOOST_LOG_TRIVIAL(info) << "Network plugin mode: "
-        << (NetworkAgent::use_legacy_network ? ("legacy (version: " + std::string(BAMBU_NETWORK_AGENT_VERSION_LEGACY) + ")") : ("modern (version: " + configured_version + ")"));
+    std::string configured_version = get_latest_network_version();
+    if (app_config) {
+        std::string stored_version = app_config->get_network_plugin_version();
+        if (stored_version != configured_version) {
+            BOOST_LOG_TRIVIAL(info) << "Forcing network plugin version to latest: " << configured_version << " (was " << stored_version << ")";
+            app_config->set(SETTING_NETWORK_PLUGIN_VERSION, configured_version);
+            app_config->save();
+        }
+    }
+    NetworkAgent::use_legacy_network = false;
+    BOOST_LOG_TRIVIAL(info) << "Network plugin mode: modern (version: " << configured_version << ")";
     // Force legacy network plugin if debugger attached
     // See https://github.com/bambulab/BambuStudio/issues/6726
     /* if (!NetworkAgent::use_legacy_network) {
@@ -3612,7 +3603,11 @@ bool GUI_App::on_init_network(bool try_backup)
         m_networking_need_update = true;
     };
 
-    std::string config_version = app_config->get_network_plugin_version();
+    std::string config_version = get_latest_network_version();
+    if (app_config && app_config->get_network_plugin_version() != config_version) {
+        app_config->set(SETTING_NETWORK_PLUGIN_VERSION, config_version);
+        app_config->save();
+    }
 
     if (should_load_networking_plugin) {
         if (config_version.empty()) {
@@ -3711,59 +3706,60 @@ bool GUI_App::on_init_network(bool try_backup)
         if (!create_network_agent) {
             int result = Slic3r::NetworkAgent::unload_network_module();
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": unload_network_module after create_agent failure, result = " << result;
-        } else {
-            if (!m_device_manager)
-                m_device_manager = new Slic3r::DeviceManager(m_agent);
-            else
-                m_device_manager->set_agent(m_agent);
-
-            if (!m_user_manager)
-                m_user_manager = new Slic3r::UserManager(m_agent);
-            else
-                m_user_manager->set_agent(m_agent);
-
-            if (this->is_enable_multi_machine()) {
-                if (!m_task_manager) {
-                    m_task_manager = new Slic3r::TaskManager(m_agent);
-                    m_task_manager->start();
-                }
-
-                m_device_manager->EnableMultiMachine(true);
-            } else {
-                m_device_manager->EnableMultiMachine(false);
-            }
-
-            if (m_agent)
-                m_agent->set_config_dir(data_directory);
-
-            if (m_agent)
-                m_agent->init_log();
-
-            if (m_agent)
-                m_agent->set_cert_file(resources_dir() + "/cert", "slicer_base64.cer");
-
-            init_http_extra_header();
-
-            if (m_agent) {
-                init_networking_callbacks();
-                std::string country_code = app_config->get_country_code();
-                m_agent->set_country_code(country_code);
-                m_agent->start();
-            }
         }
+    }
+
+    if (!m_device_manager)
+        m_device_manager = new Slic3r::DeviceManager(m_agent);
+    else
+        m_device_manager->set_agent(m_agent);
+
+    if (!m_user_manager)
+        m_user_manager = new Slic3r::UserManager(m_agent);
+    else
+        m_user_manager->set_agent(m_agent);
+
+    if (this->is_enable_multi_machine()) {
+        if (!m_task_manager) {
+            m_task_manager = new Slic3r::TaskManager(m_agent);
+            m_task_manager->start();
+        }
+
+        m_device_manager->EnableMultiMachine(true);
     } else {
+        m_device_manager->EnableMultiMachine(false);
+    }
+
+    std::string data_directory = data_dir();
+
+    if (m_agent) {
+        m_agent->set_config_dir(data_directory);
+    }
+    if (m_agent) {
+        m_agent->init_log();
+    }
+
+    if (m_agent)
+        m_agent->set_cert_file(resources_dir() + "/cert", "slicer_base64.cer");
+
+    init_http_extra_header();
+
+    if (m_agent) {
+        init_networking_callbacks();
+        std::string country_code = app_config->get_country_code();
+        m_agent->set_country_code(country_code);
+        m_agent->start();
+    }
+
+    if (!should_load_networking_plugin) {
         int result = Slic3r::NetworkAgent::unload_network_module();
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network fallback, unload_network_module, result = " << result;
+        BOOST_LOG_TRIVIAL(info) << "on_init_network, unload_network_module, result = " << result;
 
         if (!m_device_manager)
             m_device_manager = new Slic3r::DeviceManager();
-        else
-            m_device_manager->set_agent(nullptr);
 
         if (!m_user_manager)
             m_user_manager = new Slic3r::UserManager();
-        else
-            m_user_manager->set_agent(nullptr);
     }
 
     if (should_load_networking_plugin && m_networking_compatible && !NetworkAgent::use_legacy_network) {

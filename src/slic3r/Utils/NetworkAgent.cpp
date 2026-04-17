@@ -12,7 +12,7 @@
 
 namespace Slic3r {
 
-bool NetworkAgent::use_legacy_network = true;
+bool NetworkAgent::use_legacy_network = false;
 
 // ============================================================================
 // Static methods - delegate to BBLNetworkPlugin

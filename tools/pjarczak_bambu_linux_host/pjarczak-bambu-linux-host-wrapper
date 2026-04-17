@@ -1,96 +1,16 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-if [[ $# -gt 1 ]]; then
-    echo "usage: $0 [path-to-pjarczak_bambu_linux_host]" >&2
-    exit 2
-fi
-
-SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-HOST_BIN="${1:-$SELF_DIR/pjarczak_bambu_linux_host}"
-HOST_BIN="$(python3 - <<'PY' "$HOST_BIN"
-import os, sys
-print(os.path.abspath(sys.argv[1]))
-PY
-)"
-HOST_DIR="$(dirname -- "$HOST_BIN")"
-RUNTIME_DIR="${PJARCZAK_LINUX_HOST_RUNTIME_DIR:-$HOST_DIR/pjarczak_bambu_linux_host.runtime}"
-DOCKER_IMAGE="${PJARCZAK_DOCKER_IMAGE:-ubuntu:24.04}"
-DOCKER_PLATFORM="${PJARCZAK_DOCKER_PLATFORM:-linux/amd64}"
-
-if command -v docker >/dev/null 2>&1; then
-    ENGINE=docker
-elif command -v podman >/dev/null 2>&1; then
-    ENGINE=podman
-else
-    echo "missing docker/podman - mac bridge wrapper cannot start the linux host" >&2
+HOST_PATH="${1:-}"
+if [ -z "$HOST_PATH" ]; then
+    echo "missing host path" >&2
     exit 127
 fi
 
-if [[ ! -f "$HOST_BIN" ]]; then
-    echo "missing linux host binary: $HOST_BIN" >&2
-    exit 1
+RUNNER="${PJARCZAK_MAC_LINUX_GUEST_RUNNER:-}"
+if [ -z "$RUNNER" ]; then
+    echo "PJARCZAK_MAC_LINUX_GUEST_RUNNER not set" >&2
+    exit 127
 fi
 
-if [[ ! -d "$RUNTIME_DIR" ]]; then
-    echo "missing linux host runtime directory: $RUNTIME_DIR" >&2
-    exit 1
-fi
-
-declare -a RUN_ARGS
-RUN_ARGS=(run --rm -i --platform "$DOCKER_PLATFORM" --network host)
-
-declare -A SEEN_MOUNTS=()
-
-add_mount() {
-    local path="$1"
-    [[ -n "$path" ]] || return 0
-    [[ -e "$path" ]] || return 0
-    local abs
-    abs="$(python3 - <<'PY' "$path"
-import os, sys
-print(os.path.abspath(sys.argv[1]))
-PY
-)"
-    [[ -n "${SEEN_MOUNTS[$abs]:-}" ]] && return 0
-    SEEN_MOUNTS["$abs"]=1
-    RUN_ARGS+=(-v "$abs:$abs:ro")
-}
-
-add_env() {
-    local name="$1"
-    local value="${!name:-}"
-    [[ -n "$value" ]] || return 0
-    RUN_ARGS+=(-e "$name=$value")
-}
-
-add_mount "$HOST_DIR"
-add_mount "$RUNTIME_DIR"
-
-if [[ -n "${PJARCZAK_BAMBU_PLUGIN_DIR:-}" ]]; then
-    add_mount "${PJARCZAK_BAMBU_PLUGIN_DIR}"
-fi
-
-for extra_path in "${PJARCZAK_BAMBU_NETWORK_SO:-}" "${PJARCZAK_BAMBU_SOURCE_SO:-}" "${PJARCZAK_BAMBU_LIVE555_SO:-}"; do
-    if [[ -n "$extra_path" ]]; then
-        add_mount "$(dirname -- "$extra_path")"
-    fi
-done
-
-add_env PJARCZAK_BAMBU_PLUGIN_DIR
-add_env PJARCZAK_BAMBU_NETWORK_SO
-add_env PJARCZAK_BAMBU_SOURCE_SO
-add_env PJARCZAK_BAMBU_LIVE555_SO
-add_env PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION
-
-printf -v Q_HOST_BIN '%q' "$HOST_BIN"
-printf -v Q_RUNTIME_DIR '%q' "$RUNTIME_DIR"
-
-INNER_CMD="set -eu;"
-INNER_CMD+="export LD_LIBRARY_PATH=${Q_RUNTIME_DIR}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}};"
-INNER_CMD+="[ -x ${Q_HOST_BIN} ] || chmod +x ${Q_HOST_BIN} || true;"
-INNER_CMD+="exec ${Q_HOST_BIN};"
-
-RUN_ARGS+=("$DOCKER_IMAGE" /bin/bash -lc "$INNER_CMD")
-
-exec "$ENGINE" "${RUN_ARGS[@]}"
+exec "$RUNNER" "$HOST_PATH"

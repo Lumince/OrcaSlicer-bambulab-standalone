@@ -12,7 +12,7 @@ def sha256(p: Path) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('plugin_dir', type=Path)
-    ap.add_argument('--abi-version', default='02.05.02.51')
+    ap.add_argument('--abi-version', default='02.05.02.58')
     ap.add_argument('--out', type=Path, default=None)
     args = ap.parse_args()
     net = args.plugin_dir / 'libbambu_networking.so'
