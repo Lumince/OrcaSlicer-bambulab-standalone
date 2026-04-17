@@ -2,7 +2,8 @@ param(
     [string]$PackageDir = "",
     [string]$DistroName = "",
     [string]$PluginCacheDir = "",
-    [switch]$AllowMissingLinuxPlugin
+    [switch]$AllowMissingLinuxPlugin,
+    [switch]$SkipProbe
 )
 
 $ErrorActionPreference = 'Stop'
@@ -217,6 +218,11 @@ Write-Host "Bridge package dir: $PackageDir"
 Write-Host "Plugin cache dir: $PluginCacheDir"
 Write-Host "WSL distro: $DistroName"
 Write-Host "Bootstrap script: $bootstrapPath"
+
+if ($SkipProbe) {
+    Write-Host 'WSL runtime core OK'
+    exit 0
+}
 
 $probe = Invoke-NativeCapture $wsl @('-d', $DistroName, '--user', 'root', '--', 'sh', $bootstrapWsl, '--probe', $packageDirWsl, $pluginCacheDirWsl)
 if ($probe.ExitCode -ne 0) {

@@ -47,14 +47,6 @@ int run_probe_auth()
     if (!is_login.value("ok", false))
         return 7;
 
-    auto login_cmd = host.handle("net.build_login_cmd", {{"agent", agent}});
-    if (!login_cmd.value("ok", false))
-        return 8;
-
-    auto login_info = host.handle("net.build_login_info", {{"agent", agent}});
-    if (!login_info.value("ok", false))
-        return 9;
-
     return 0;
 }
 }

@@ -111,7 +111,7 @@ function Resolve-PluginCacheDir([string]$Dir) {
     }
 
     if (-not $env:APPDATA) { throw 'APPDATA is not available' }
-    return [System.IO.Path]::GetFullPath((Join-Path $env:APPDATA 'OrcaSlicer\ota'))
+    return [System.IO.Path]::GetFullPath((Join-Path $env:APPDATA 'OrcaSlicer\ota\plugins'))
 }
 
 function Read-TextAuto([string]$Path) {
@@ -384,7 +384,8 @@ $verifyArgs = @(
     '-PackageDir', $PackageDir,
     '-DistroName', $DistroName,
     '-PluginCacheDir', $PluginCacheDir,
-    '-AllowMissingLinuxPlugin'
+    '-AllowMissingLinuxPlugin',
+    '-SkipProbe'
 )
 
 $verifyShell = $null

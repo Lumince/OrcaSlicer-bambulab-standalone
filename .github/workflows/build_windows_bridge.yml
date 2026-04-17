@@ -201,8 +201,8 @@ jobs:
         run: |
           Get-ChildItem -Force "$env:APPDATA\OrcaSlicer\plugins" | Format-Table Name, Length -AutoSize
           Write-Host "--- cache dir ---"
-          if (Test-Path "$env:APPDATA\OrcaSlicer\ota") {
-            Get-ChildItem -Force "$env:APPDATA\OrcaSlicer\ota" | Format-Table Name, Length -AutoSize
+          if (Test-Path "$env:APPDATA\OrcaSlicer\ota\plugins") {
+            Get-ChildItem -Force "$env:APPDATA\OrcaSlicer\ota\plugins" | Format-Table Name, Length -AutoSize
           }
 
       - name: Validate live Orca plugin dir bootstrap package

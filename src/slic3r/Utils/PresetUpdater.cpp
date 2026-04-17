@@ -798,7 +798,7 @@ bool PresetUpdater::priv::get_cached_plugins_version(std::string& cached_version
 {
     std::string data_dir_str = data_dir();
     boost::filesystem::path data_dir_path(data_dir_str);
-    auto cache_folder = data_dir_path / "ota";
+    auto cache_folder = data_dir_path / "ota" / "plugins";
     bool has_plugins = false;
 
     const bool pj_bridge = Slic3r::PJarczakLinuxBridge::enabled();
@@ -811,7 +811,6 @@ bool PresetUpdater::priv::get_cached_plugins_version(std::string& cached_version
             cache_folder / "liblive555.so",
             cache_folder / "libagora_rtc_sdk.so",
             cache_folder / "libagora-fdkaac.so",
-            cache_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
             cache_folder / "network_plugins.json"
         };
     } else {
@@ -911,7 +910,7 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
         if (need_delete_cache) {
             std::string data_dir_str = data_dir();
             boost::filesystem::path data_dir_path(data_dir_str);
-            auto cache_folder = data_dir_path / "ota";
+            auto cache_folder = data_dir_path / "ota" / "plugins";
 
             std::vector<boost::filesystem::path> cache_files;
             if (Slic3r::PJarczakLinuxBridge::enabled()) {
@@ -921,7 +920,6 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
                     cache_folder / "liblive555.so",
                     cache_folder / "libagora_rtc_sdk.so",
                     cache_folder / "libagora-fdkaac.so",
-                    cache_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name(),
                     cache_folder / "network_plugins.json"
                 };
             } else {
@@ -969,7 +967,7 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
     try {
         std::map<std::string, Resource> resources
         {
-            {"slicer/plugins/cloud", { using_version, "", "", false, cache_path.string(), {"plugins"}}}
+            {"slicer/plugins/cloud", { using_version, "", "", false, (cache_path / "plugins").string()}}
         };
         sync_resources(http_url, resources, true, plugin_version, "network_plugins.json");
     }
