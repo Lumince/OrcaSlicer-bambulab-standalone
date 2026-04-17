@@ -215,18 +215,6 @@ if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host_abi0" (
     exit /b 1
 )
 
-if not exist "%HOST_RUNTIME_DIR%\libbambu_networking.so" (
-    echo Missing linux bridge payload: %HOST_RUNTIME_DIR%\libbambu_networking.so
-    echo Package the linux host runtime after resolving proprietary payload first.
-    exit /b 1
-)
-
-if not exist "%HOST_RUNTIME_DIR%\libBambuSource.so" (
-    echo Missing linux bridge payload: %HOST_RUNTIME_DIR%\libBambuSource.so
-    echo Package the linux host runtime after resolving proprietary payload first.
-    exit /b 1
-)
-
 if not exist "%HOST_RUNTIME_DIR%\ca-certificates.crt" (
     echo Missing CA bundle for linux bridge runtime: %HOST_RUNTIME_DIR%\ca-certificates.crt
     exit /b 1
@@ -265,16 +253,6 @@ if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host_abi1" (
 
 if not exist "%HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host_abi0" (
     echo Missing linux host ABI0 runtime: %HOST_RUNTIME_DIR%\pjarczak_bambu_linux_host_abi0
-    exit /b 1
-)
-
-if not exist "%HOST_RUNTIME_DIR%\libbambu_networking.so" (
-    echo Missing linux bridge payload: %HOST_RUNTIME_DIR%\libbambu_networking.so
-    exit /b 1
-)
-
-if not exist "%HOST_RUNTIME_DIR%\libBambuSource.so" (
-    echo Missing linux bridge payload: %HOST_RUNTIME_DIR%\libBambuSource.so
     exit /b 1
 )
 
