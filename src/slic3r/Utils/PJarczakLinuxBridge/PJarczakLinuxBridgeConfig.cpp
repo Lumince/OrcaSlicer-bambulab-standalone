@@ -147,6 +147,11 @@ const char* forced_download_os_type()
     return "linux";
 }
 
+const char* forced_client_version()
+{
+    return "02.05.02.51";
+}
+
 std::string bridge_network_module_stem()
 {
     return "pjarczak_bambu_networking_bridge";

@@ -2,7 +2,7 @@
 set -eu
 
 log() {
-    printf '%s\n' "[pjarczak_wsl_run_host] $*" >&2
+    printf '%s\n' "[pjarczak-wsl-run-host] $*" >&2
 }
 
 MODE="run"
@@ -16,10 +16,6 @@ PLUGIN_CACHE_DIR="${2:-${PJARCZAK_BAMBU_WINDOWS_PLUGIN_CACHE_DIR:-}}"
 if [ -z "$PACKAGE_DIR" ]; then
     log "missing Windows package directory path"
     exit 127
-fi
-
-if [ -n "$PLUGIN_CACHE_DIR" ] && [ -d "$PLUGIN_CACHE_DIR/plugins" ] && [ ! -f "$PLUGIN_CACHE_DIR/libbambu_networking.so" ] && [ ! -f "$PLUGIN_CACHE_DIR/libBambuSource.so" ]; then
-    PLUGIN_CACHE_DIR="$PLUGIN_CACHE_DIR/plugins"
 fi
 
 HOST_SRC="$PACKAGE_DIR/pjarczak_bambu_linux_host"
@@ -219,6 +215,13 @@ if command -v ldd >/dev/null 2>&1; then
 fi
 
 if [ "$MODE" = "probe" ]; then
+    PROBE_LOG_DIR="/tmp/pjarczak-bambu-probe"
+    mkdir -p "$PROBE_LOG_DIR"
+    if ! PJARCZAK_BAMBU_PROBE_LOG_DIR="$PROBE_LOG_DIR" PJARCZAK_BAMBU_COUNTRY_CODE="${PJARCZAK_BAMBU_COUNTRY_CODE:-PL}" "$CURRENT_DIR/pjarczak_bambu_linux_host" --probe-auth >/tmp/pjarczak-probe.txt 2>&1; then
+        log "probe_auth_failed"
+        cat /tmp/pjarczak-probe.txt >&2 || true
+        exit 127
+    fi
     echo "probe_ok runtime_dir=$CURRENT_DIR runtime_hash=$RUNTIME_HASH bin=$BIN_PATH"
     exit 0
 fi
