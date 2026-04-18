@@ -1243,6 +1243,2236 @@ int GUI_App::download_plugin(std::string name, std::string package_name, Install
     };
 
     if (pj_force_linux_payload) {
+        auto headers = saved_headers;
+        headers["X-BBL-OS-Type"] = Slic3r::PJarczakLinuxBridge::forced_download_os_type();
+        headers["X-BBL-Client-Name"] = "BambuStudio";
+        Slic3r::Http::set_extra_headers(headers);
+        changed_headers = true;
+    }
+
+    std::string url = get_plugin_url(name, app_config->get_country_code());
+    std::string download_url;
+    Slic3r::Http http_url = Slic3r::Http::get(url);
+    BOOST_LOG_TRIVIAL(info) << "[download_plugin]: check the plugin from " << url;
+    http_url.timeout_connect(TIMEOUT_CONNECT)
+        .timeout_max(TIMEOUT_RESPONSE)
+        .on_complete(
+            [&download_url](std::string body, unsigned status) {
+                try {
+                    json j = json::parse(body);
+                    std::string message = j["message"].get<std::string>();
+                    if (message == "success") {
+                        json resource = j.at("resources");
+                        if (resource.is_array()) {
+                            for (auto iter = resource.begin(); iter != resource.end(); iter++) {
+                                for (auto sub_iter = iter.value().begin(); sub_iter != iter.value().end(); sub_iter++) {
+                                    if (boost::iequals(sub_iter.key(), "url"))
+                                        download_url = sub_iter.value();
+                                }
+                            }
+                        }
+                    }
+                } catch (...) {}
+            })
+        .on_error(
+            [&result, &err_msg](std::string body, std::string error, unsigned int status) {
+                BOOST_LOG_TRIVIAL(error) << "[download_plugin 1] on_error: " << error << ", body = " << body;
+                err_msg += "[download_plugin 1] on_error: " + error + ", body = " + body;
+                result = -1;
+            })
+        .perform_sync();
+
+    restore_headers();
+
+    bool cancel = false;
+    if (result < 0) {
+        if (pro_fn) pro_fn(InstallStatusDownloadFailed, 0, cancel);
+        return result;
+    }
+
+    if (download_url.empty()) {
+        if (pro_fn) pro_fn(InstallStatusDownloadFailed, 0, cancel);
+        return -1;
+    } else if (pro_fn) {
+        pro_fn(InstallStatusNormal, 5, cancel);
+    }
+
+    if (m_networking_cancel_update || cancel) {
+        return -1;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "[download_plugin] get_url = " << download_url;
+
+    Slic3r::Http http = Slic3r::Http::get(download_url);
+    int reported_percent = 0;
+    http.on_progress(
+            [this, &pro_fn, cancel_fn, &result, &reported_percent, &err_msg](Slic3r::Http::Progress progress, bool& cancel) {
+                int percent = 0;
+                if (progress.dltotal != 0)
+                    percent = progress.dlnow * 50 / progress.dltotal;
+                bool was_cancel = false;
+                if (pro_fn && ((percent - reported_percent) >= 10)) {
+                    pro_fn(InstallStatusNormal, percent, was_cancel);
+                    reported_percent = percent;
+                    BOOST_LOG_TRIVIAL(info) << "[download_plugin 2] progress: " << reported_percent;
+                }
+                cancel = m_networking_cancel_update || was_cancel;
+                if (cancel_fn && cancel_fn())
+                    cancel = true;
+                if (cancel) {
+                    err_msg += "[download_plugin] cancel";
+                    result = -1;
+                }
+            })
+        .on_complete([&pro_fn, tmp_path, target_file_path](std::string body, unsigned status) {
+            bool cancel = false;
+            fs::fstream file(tmp_path, std::ios::out | std::ios::binary | std::ios::trunc);
+            file.write(body.c_str(), body.size());
+            file.close();
+            fs::rename(tmp_path, target_file_path);
+            if (pro_fn) pro_fn(InstallStatusDownloadCompleted, 80, cancel);
+        })
+        .on_error([&pro_fn, &result, &err_msg](std::string body, std::string error, unsigned int status) {
+            bool cancel = false;
+            if (pro_fn) pro_fn(InstallStatusDownloadFailed, 0, cancel);
+            BOOST_LOG_TRIVIAL(error) << "[download_plugin 2] on_error: " << error << ", body = " << body;
+            err_msg += "[download_plugin 2] on_error: " + error + ", body = " + body;
+            result = -1;
+        });
+
+    http.perform_sync();
+    return result;
+}
+
+int GUI_App::install_plugin(std::string name, std::string package_name, InstallProgressFn pro_fn, WasCancelledFn cancel_fn)
+{
+    bool cancel = false;
+    std::string target_file_path = (fs::temp_directory_path() / package_name).string();
+
+    BOOST_LOG_TRIVIAL(info) << "[install_plugin] enter";
+    std::string data_dir_str = data_dir();
+    boost::filesystem::path data_dir_path(data_dir_str);
+    auto plugin_folder = data_dir_path / name;
+    auto backup_folder = plugin_folder / "backup";
+    if (!boost::filesystem::exists(plugin_folder))
+        boost::filesystem::create_directory(plugin_folder);
+    if (!boost::filesystem::exists(backup_folder))
+        boost::filesystem::create_directory(backup_folder);
+
+    if (m_networking_cancel_update)
+        return -1;
+    if (pro_fn)
+        pro_fn(InstallStatusNormal, 50, cancel);
+
+    mz_zip_archive archive;
+    mz_zip_zero_struct(&archive);
+    if (!open_zip_reader(&archive, target_file_path)) {
+        if (pro_fn) pro_fn(InstallStatusDownloadFailed, 0, cancel);
+        return InstallStatusUnzipFailed;
+    }
+
+    const bool pj_force_linux_payload = Slic3r::PJarczakLinuxBridge::should_force_linux_plugin_payload(name);
+    const std::string manifest_name = Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name();
+
+    mz_uint num_entries = mz_zip_reader_get_num_files(&archive);
+    mz_zip_archive_file_stat stat;
+    for (mz_uint i = 0; i < num_entries; i++) {
+        if (m_networking_cancel_update || cancel) {
+            close_zip_reader(&archive);
+            return -1;
+        }
+        if (!mz_zip_reader_file_stat(&archive, i, &stat))
+            continue;
+        if (stat.m_uncomp_size == 0)
+            continue;
+
+        std::string dest_file;
+        if (stat.m_is_utf8) {
+            dest_file = stat.m_filename;
+        } else {
+            std::string extra(1024, 0);
+            size_t n = mz_zip_reader_get_extra(&archive, stat.m_file_index, extra.data(), extra.size());
+            dest_file = decode(extra.substr(0, n), stat.m_filename);
+        }
+
+        boost::filesystem::path relative(dest_file);
+        if (pj_force_linux_payload) {
+            const std::string file_name = relative.filename().string();
+            if (!(file_name == manifest_name || Slic3r::PJarczakLinuxBridge::is_linux_payload_filename(file_name)))
+                continue;
+            relative = boost::filesystem::path(file_name);
+        }
+
+        auto dest_path = plugin_folder / relative;
+        boost::filesystem::create_directories(dest_path.parent_path());
+        std::string dest_zip_file = encode_path(dest_path.string().c_str());
+
+        try {
+            if (fs::exists(dest_path))
+                fs::remove(dest_path);
+            mz_bool res = 0;
+#ifndef WIN32
+            if (S_ISLNK(stat.m_external_attr >> 16)) {
+                std::string link(stat.m_uncomp_size + 1, 0);
+                res = mz_zip_reader_extract_to_mem(&archive, stat.m_file_index, link.data(), stat.m_uncomp_size, 0);
+                try {
+                    boost::filesystem::create_symlink(link, dest_path);
+                } catch (const std::exception &) {}
+            } else {
+#endif
+                res = mz_zip_reader_extract_to_file(&archive, stat.m_file_index, dest_zip_file.c_str(), 0);
+#ifndef WIN32
+            }
+#endif
+            if (res == 0) {
+#ifdef WIN32
+                std::wstring new_dest_zip_file = boost::locale::conv::utf_to_utf<wchar_t>(dest_path.generic_string());
+                res = mz_zip_reader_extract_to_file_w(&archive, stat.m_file_index, new_dest_zip_file.c_str(), 0);
+#endif
+                if (res == 0) {
+                    close_zip_reader(&archive);
+                    if (pro_fn) pro_fn(InstallStatusUnzipFailed, 0, cancel);
+                    return InstallStatusUnzipFailed;
+                }
+            }
+
+            if (pj_force_linux_payload && relative.filename().string() != manifest_name) {
+                std::string validate_reason;
+                if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_file(dest_path.string(), &validate_reason)) {
+                    BOOST_LOG_TRIVIAL(error) << "[install_plugin] linux payload validation failed for " << dest_path.string() << ": " << validate_reason;
+                    close_zip_reader(&archive);
+                    if (pro_fn) pro_fn(InstallStatusUnzipFailed, 0, cancel);
+                    return InstallStatusUnzipFailed;
+                }
+            }
+        } catch (const std::exception &) {
+            close_zip_reader(&archive);
+            if (pro_fn) pro_fn(InstallStatusUnzipFailed, 0, cancel);
+            return InstallStatusUnzipFailed;
+        }
+    }
+
+    close_zip_reader(&archive);
+
+    if (pj_force_linux_payload) {
+        std::string validate_reason;
+        const auto manifest_path = plugin_folder / manifest_name;
+        if (boost::filesystem::exists(manifest_path) &&
+            !Slic3r::PJarczakLinuxBridge::validate_linux_payload_set_against_manifest(plugin_folder, &validate_reason)) {
+            BOOST_LOG_TRIVIAL(error) << "[install_plugin] manifest validation failed: " << validate_reason;
+            if (pro_fn) pro_fn(InstallStatusUnzipFailed, 0, cancel);
+            return InstallStatusUnzipFailed;
+        }
+    }
+
+    {
+        fs::path dir_path(plugin_folder);
+        if (fs::exists(dir_path) && fs::is_directory(dir_path)) {
+            int file_count = 0, file_index = 0;
+            for (fs::directory_iterator it(dir_path); it != fs::directory_iterator(); ++it) {
+                if (it->path().string() == backup_folder.string())
+                    continue;
+                if (fs::is_regular_file(it->status()))
+                    ++file_count;
+            }
+            for (fs::directory_iterator it(dir_path); it != fs::directory_iterator(); ++it) {
+                if (it->path().string() == backup_folder.string())
+                    continue;
+                auto dest_path = backup_folder.string() + "/" + it->path().filename().string();
+                if (fs::is_regular_file(it->status())) {
+                    try {
+                        if (file_count > 0 && pro_fn)
+                            pro_fn(InstallStatusNormal, 50 + file_index / file_count, cancel);
+                        ++file_index;
+                        if (fs::exists(dest_path))
+                            fs::remove(dest_path);
+                        std::string error_message;
+                        CopyFileResult cfr = copy_file(it->path().string(), dest_path, error_message, false);
+                        if (cfr != CopyFileResult::SUCCESS)
+                            BOOST_LOG_TRIVIAL(error) << "Copying to backup failed(" << cfr << "): " << error_message;
+                    } catch (const std::exception &) {}
+                } else {
+                    copy_framework(it->path().string(), dest_path);
+                }
+            }
+        }
+    }
+
+    if (pro_fn)
+        pro_fn(InstallStatusInstallCompleted, 100, cancel);
+    if (name == "plugins")
+        app_config->set_bool("installed_networking", true);
+    BOOST_LOG_TRIVIAL(info) << "[install_plugin] success";
+    return 0;
+}
+
+void GUI_App::restart_networking()
+{
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(" enter, mainframe %1%")%mainframe;
+    on_init_network(true);
+    StaticBambuLib::reset();
+    if(m_agent) {
+        init_networking_callbacks();
+        m_agent->set_on_ssdp_msg_fn(
+            [this](std::string json_str) {
+                if (is_closing()) {
+                    return;
+                }
+                GUI::wxGetApp().CallAfter([this, json_str] {
+                    if (m_device_manager) {
+                        m_device_manager->on_machine_alive(json_str);
+                    }
+                    });
+            }
+        );
+        m_agent->set_on_http_error_fn([this](unsigned int status, std::string body) {
+            this->handle_http_error(status, body);
+        });
+        m_agent->start_discovery(true, false);
+        if (mainframe)
+            mainframe->refresh_plugin_tips();
+        if (plater_)
+            plater_->get_notification_manager()->bbl_close_plugin_install_notification();
+
+        if (m_agent->is_user_login()) {
+            remove_user_presets();
+            enable_user_preset_folder(true);
+            preset_bundle->load_user_presets(m_agent->get_user_id(), ForwardCompatibilitySubstitutionRule::Enable);
+            mainframe->update_side_preset_ui();
+        }
+
+        if (app_config->get("sync_user_preset") == "true") {
+            start_sync_user_preset();
+        }
+        // if (mainframe && this->app_config->get("staff_pick_switch") == "true") {
+        //     if (mainframe->m_webview) { mainframe->m_webview->SendDesignStaffpick(has_model_mall()); }
+        // }
+    }
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(" exit, m_agent=%1%")%m_agent;
+}
+
+// Network plugin hot reload timeout constants (in milliseconds)
+namespace {
+    constexpr int CALLBACK_DRAIN_TIMEOUT_MS   = 200;  // Time to drain pending CallAfter callbacks
+    constexpr int NETWORK_IDLE_TIMEOUT_MS     = 500;  // Max wait for network operations to complete
+    constexpr int FINAL_DRAIN_TIMEOUT_MS      = 100;  // Final event processing before destruction
+    constexpr int POLL_INTERVAL_MS            = 50;   // Polling interval for state checks
+    constexpr int MAX_YIELD_ITERATIONS        = 20;   // Maximum wxYield calls per drain cycle
+}
+
+// Process pending wx events with bounded iteration count
+void GUI_App::drain_pending_events(int timeout_ms)
+{
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    int yield_count = 0;
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        // Process pending events
+        if (wxTheApp) {
+            wxTheApp->ProcessPendingEvents();
+        }
+
+        // Bounded wxYield to prevent infinite loops
+        if (yield_count < MAX_YIELD_ITERATIONS) {
+            wxYield();
+            ++yield_count;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(POLL_INTERVAL_MS));
+    }
+}
+
+// Wait for network operations to complete with state verification
+bool GUI_App::wait_for_network_idle(int timeout_ms)
+{
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!m_agent) {
+            return true;  // Agent already gone
+        }
+
+        // Verify all operations completed
+        bool server_disconnected = !m_agent->is_server_connected();
+
+        if (server_disconnected) {
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": network is idle";
+            return true;
+        }
+
+        // Process events while waiting
+        if (wxTheApp) {
+            wxTheApp->ProcessPendingEvents();
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(POLL_INTERVAL_MS));
+    }
+
+    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": timeout after " << timeout_ms
+                                << "ms, server_connected=" << (m_agent ? m_agent->is_server_connected() : false);
+    return false;
+}
+
+bool GUI_App::hot_reload_network_plugin()
+{
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": starting hot reload";
+
+    wxBusyCursor busy;
+    wxBusyInfo info(_L("Reloading network plug-in..."), mainframe);
+    wxYield();
+    wxWindowDisabler disabler;
+
+    if (mainframe) {
+        int current_tab = mainframe->m_tabpanel->GetSelection();
+        if (current_tab == MainFrame::TabPosition::tpMonitor) {
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": navigating away from Monitor tab before unload";
+            mainframe->m_tabpanel->SetSelection(MainFrame::TabPosition::tp3DEditor);
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": stopping sync thread before unload";
+    if (m_user_sync_token) {
+        m_user_sync_token.reset();
+    }
+    if (m_sync_update_thread.joinable()) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": waiting for sync thread to finish";
+        m_sync_update_thread.join();
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": sync thread finished";
+    }
+
+    if (m_agent) {
+        // Phase 1: Clear all callbacks (stops new invocations)
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Phase 1 - clearing callbacks";
+        m_agent->set_on_ssdp_msg_fn(nullptr);
+        m_agent->set_on_user_login_fn(nullptr);
+        m_agent->set_on_printer_connected_fn(nullptr);
+        m_agent->set_on_server_connected_fn(nullptr);
+        m_agent->set_on_http_error_fn(nullptr);
+        m_agent->set_on_subscribe_failure_fn(nullptr);
+        m_agent->set_on_message_fn(nullptr);
+        m_agent->set_on_user_message_fn(nullptr);
+        m_agent->set_on_local_connect_fn(nullptr);
+        m_agent->set_on_local_message_fn(nullptr);
+        m_agent->set_queue_on_main_fn(nullptr);
+
+        // Phase 2: Drain pending CallAfter callbacks (bounded)
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Phase 2 - draining callbacks";
+        drain_pending_events(CALLBACK_DRAIN_TIMEOUT_MS);
+
+        // Phase 3: Stop operations and verify return values
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Phase 3 - stopping operations";
+        bool discovery_stopped = m_agent->start_discovery(false, false);
+        int disconnect_result = m_agent->disconnect_printer();
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": discovery_stopped=" << discovery_stopped
+                                << ", disconnect_result=" << disconnect_result;
+
+        // Phase 4: Wait for idle with state verification
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Phase 4 - waiting for idle";
+        bool became_idle = wait_for_network_idle(NETWORK_IDLE_TIMEOUT_MS);
+        if (!became_idle) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": proceeding despite timeout";
+        }
+
+        // Phase 5: Final bounded drain before destruction
+        drain_pending_events(FINAL_DRAIN_TIMEOUT_MS);
+
+        // Phase 6: Destroy agent
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Phase 6 - destroying agent";
+        delete m_agent;
+        m_agent = nullptr;
+    }
+
+    // Phase 7: Unload module
+    if (Slic3r::NetworkAgent::is_network_module_loaded()) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Phase 7 - unloading module";
+        drain_pending_events(FINAL_DRAIN_TIMEOUT_MS);
+        int unload_result = Slic3r::NetworkAgent::unload_network_module();
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": unload_result=" << unload_result;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": calling restart_networking";
+    restart_networking();
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": restart_networking returned";
+
+    std::string loaded_version = Slic3r::NetworkAgent::get_version();
+    bool success = m_agent != nullptr && !loaded_version.empty() && loaded_version != "00.00.00.00";
+    bool user_logged_in = m_agent && m_agent->is_user_login();
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": after restart_networking, is_user_login = " << user_logged_in
+                            << ", m_agent = " << (m_agent ? "valid" : "null")
+                            << ", version = " << loaded_version;
+
+    if (success && m_agent && m_device_manager) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": connecting to cloud server";
+        m_agent->connect_server();
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": re-subscribing to cloud printers";
+        m_device_manager->add_user_subscribe();
+    }
+
+    if (mainframe && mainframe->m_monitor) {
+        mainframe->m_monitor->update_network_version_footer();
+        mainframe->m_monitor->set_default();
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": reset monitor panel";
+    }
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": hot reload " << (success ? "successful" : "failed");
+    return success;
+}
+
+std::string GUI_App::get_latest_network_version() const
+{
+    return Slic3r::get_latest_network_version();
+}
+
+bool GUI_App::has_network_update_available() const
+{
+    std::string current = Slic3r::NetworkAgent::get_version();
+    std::string latest = get_latest_network_version();
+
+    if (current.empty() || current == "00.00.00.00")
+        return false;
+
+    return current.substr(0, 8) != latest.substr(0, 8);
+}
+
+void GUI_App::show_network_plugin_download_dialog(bool is_update)
+{
+    auto load_error = Slic3r::NetworkAgent::get_load_error();
+
+    NetworkPluginDownloadDialog::Mode mode;
+    if (load_error.has_error) {
+        mode = NetworkPluginDownloadDialog::Mode::CorruptedPlugin;
+    } else if (is_update) {
+        mode = NetworkPluginDownloadDialog::Mode::UpdateAvailable;
+    } else {
+        mode = NetworkPluginDownloadDialog::Mode::MissingPlugin;
+    }
+
+    std::string current_version = Slic3r::NetworkAgent::get_version();
+
+    NetworkPluginDownloadDialog dlg(mainframe, mode, current_version,
+        load_error.message, load_error.technical_details);
+
+    int result = dlg.ShowModal();
+
+    switch (result) {
+    case NetworkPluginDownloadDialog::RESULT_DOWNLOAD:
+        {
+            std::string selected = dlg.get_selected_version();
+            app_config->set_network_plugin_version(selected);
+            app_config->save();
+
+            DownloadProgressDialog download_dlg(_L("Downloading Network Plug-in"));
+            download_dlg.ShowModal();
+        }
+        break;
+
+    case NetworkPluginDownloadDialog::RESULT_REMIND_LATER:
+        app_config->set_remind_network_update_later(true);
+        app_config->save();
+        break;
+
+    case NetworkPluginDownloadDialog::RESULT_SKIP_VERSION:
+        {
+            std::string latest = get_latest_network_version();
+            app_config->add_skipped_network_version(latest);
+            app_config->save();
+        }
+        break;
+
+    case NetworkPluginDownloadDialog::RESULT_DONT_ASK:
+        app_config->set_network_update_prompt_disabled(true);
+        app_config->save();
+        break;
+
+    case NetworkPluginDownloadDialog::RESULT_SKIP:
+    default:
+        break;
+    }
+}
+
+void GUI_App::remove_old_networking_plugins()
+{
+    std::string data_dir_str = data_dir();
+    boost::filesystem::path data_dir_path(data_dir_str);
+    auto plugin_folder = data_dir_path / "plugins";
+    //auto plugin_folder = boost::filesystem::path(wxStandardPaths::Get().GetUserDataDir().ToUTF8().data()) / "plugins";
+    if (boost::filesystem::exists(plugin_folder)) {
+        BOOST_LOG_TRIVIAL(info) << "[remove_old_networking_plugins] remove the directory "<<plugin_folder.string();
+        try {
+            fs::remove_all(plugin_folder);
+        } catch (...) {
+            BOOST_LOG_TRIVIAL(error) << "Failed  removing the plugins directory " << plugin_folder.string();
+        }
+    }
+}
+
+int GUI_App::updating_bambu_networking()
+{
+    DownloadProgressDialog dlg(_L("Downloading Bambu Network Plug-in"));
+    dlg.ShowModal();
+    return 0;
+}
+
+bool GUI_App::check_networking_version()
+{
+    std::string network_ver = Slic3r::NetworkAgent::get_version();
+    if (!network_ver.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "get_network_agent_version=" << network_ver;
+    }
+
+    std::string studio_ver = get_latest_network_version();
+
+    BOOST_LOG_TRIVIAL(info) << "check_networking_version: network_ver=" << network_ver << ", expected=" << studio_ver;
+
+    if (network_ver.length() >= 8 && studio_ver.length() >= 8) {
+        if (network_ver.substr(0,8) == studio_ver.substr(0,8)) {
+            m_networking_compatible = true;
+            return true;
+        }
+    }
+
+    m_networking_compatible = false;
+    return false;
+}
+
+bool GUI_App::is_compatibility_version()
+{
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": m_networking_compatible=%1%")%m_networking_compatible;
+    return m_networking_compatible;
+}
+
+void GUI_App::cancel_networking_install()
+{
+    m_networking_cancel_update = true;
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": plugin install cancelled!");
+}
+
+void GUI_App::init_networking_callbacks()
+{
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": enter, m_agent=%1%")%m_agent;
+    if (m_agent) {
+        //set callbacks
+        //m_agent->set_on_user_login_fn([this](int online_login, bool login) {
+        //    GUI::wxGetApp().request_user_handle(online_login);
+        //    });
+
+        m_agent->set_server_callback([](std::string url, int status) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": server_callback, url=%1%, status=%2%") % url % status;
+            //CallAfter([this]() {
+            //    if (!m_server_error_dialog) {
+            //        /*m_server_error_dialog->EndModal(wxCLOSE);
+            //        m_server_error_dialog->Destroy();
+            //        m_server_error_dialog = nullptr;*/
+            //        m_server_error_dialog = new NetworkErrorDialog(mainframe);
+            //    }
+            //
+            //    if(plater()->get_select_machine_dialog() && plater()->get_select_machine_dialog()->IsShown()){
+            //        return;
+            //    }
+            //
+            //    if (m_server_error_dialog->m_show_again) {
+            //        return;
+            //    }
+            //
+            //    if (m_server_error_dialog->IsShown()) {
+            //        return;
+            //    }
+            //
+            //    m_server_error_dialog->ShowModal();
+            //});
+        });
+
+
+        m_agent->set_on_server_connected_fn([this](int return_code, int reason_code) {
+            if (is_closing()) {
+            return;
+            }
+            if (return_code == 5) {
+                GUI::wxGetApp().CallAfter([this] {
+                    this->request_user_logout();
+                    MessageDialog msg_dlg(nullptr, _L("Login information expired. Please login again."), "", wxAPPLY | wxOK);
+                    if (msg_dlg.ShowModal() == wxOK) {
+                        return;
+                    }
+                });
+                return;
+            }
+            GUI::wxGetApp().CallAfter([this] {
+                if (is_closing())
+                    return;
+                BOOST_LOG_TRIVIAL(trace) << "static: server connected";
+                m_agent->set_user_selected_machine(m_agent->get_user_selected_machine());
+                    if (this->is_enable_multi_machine()) {
+                        auto evt = new wxCommandEvent(EVT_UPDATE_MACHINE_LIST);
+                        wxQueueEvent(this, evt);
+                    }
+                    m_agent->set_user_selected_machine(m_agent->get_user_selected_machine());
+                    //subscribe device
+                    if (m_agent->is_user_login()) {
+
+                        /*disconnect lan*/
+                        DeviceManager* dev = this->getDeviceManager();
+                        if (!dev) return;
+
+                        MachineObject *obj = dev->get_selected_machine();
+                        if (!obj) return;
+
+                        /* resubscribe the cache dev list */
+                        if (this->is_enable_multi_machine()) {
+
+                            if (!dev->subscribe_list_cache.empty()) {
+                                dev->subscribe_device_list(dev->subscribe_list_cache);
+                            }
+                        }
+                    }
+                });
+            });
+
+        m_agent->set_on_printer_connected_fn([this](std::string dev_id) {
+            if (is_closing()) {
+                return;
+            }
+            GUI::wxGetApp().CallAfter([this, dev_id] {
+                if (is_closing())
+                    return;
+                bool tunnel = boost::algorithm::starts_with(dev_id, "tunnel/");
+                /* request_pushing */
+                MachineObject* obj = m_device_manager->get_my_machine(tunnel ? dev_id.substr(7) : dev_id);
+                if (obj) {
+                    obj->is_tunnel_mqtt = tunnel;
+                    obj->command_request_push_all(true);
+                    obj->command_get_version();
+                    obj->erase_user_access_code();
+                    obj->command_get_access_code();
+                    if (m_agent)
+                        m_agent->install_device_cert(obj->get_dev_id(), obj->is_lan_mode_printer());
+                }
+                });
+            });
+
+        m_agent->set_get_country_code_fn([this]() {
+            if (app_config)
+                return app_config->get_country_code();
+            return std::string();
+            }
+        );
+
+        m_agent->set_on_subscribe_failure_fn([this](std::string dev_id) {
+            CallAfter([this, dev_id] {
+                on_start_subscribe_again(dev_id);
+            });
+        });
+
+        m_agent->set_on_local_connect_fn(
+            [this](int state, std::string dev_id, std::string msg) {
+                if (is_closing()) {
+                    return;
+                }
+                CallAfter([this, state, dev_id, msg] {
+                    if (is_closing()) {
+                        return;
+                    }
+                    /* request_pushing */
+                    MachineObject* obj = m_device_manager->get_my_machine(dev_id);
+                    wxCommandEvent event(EVT_CONNECT_LAN_MODE_PRINT);
+
+                    if (obj) {
+
+                        if (obj->is_lan_mode_printer()) {
+                            if (state == ConnectStatus::ConnectStatusOk) {
+                                obj->command_request_push_all(true);
+                                obj->command_get_version();
+                                event.SetInt(0);
+                                event.SetString(obj->get_dev_id());
+                            } else if (state == ConnectStatus::ConnectStatusFailed) {
+                                // Orca: only update status if same device id
+                                if (m_device_manager->selected_machine != dev_id) return;
+
+                                m_device_manager->set_selected_machine("");
+                                wxString text;
+                                if (msg == "5") {
+                                    obj->set_access_code("");
+                                    obj->erase_user_access_code();
+                                    text = wxString::Format(_L("Incorrect password"));
+                                    wxGetApp().show_dialog(text);
+                                } else {
+                                text = wxString::Format(_L("Connect %s failed! [SN:%s, code=%s]"), from_u8(obj->get_dev_name()), obj->get_dev_id(), msg);
+                                    wxGetApp().show_dialog(text);
+                                }
+                                event.SetInt(-1);
+                            } else if (state == ConnectStatus::ConnectStatusLost) {
+                                m_device_manager->set_selected_machine("");
+                                event.SetInt(-1);
+                                BOOST_LOG_TRIVIAL(info) << "set_on_local_connect_fn: state = lost";
+                            } else {
+                                event.SetInt(-1);
+                                BOOST_LOG_TRIVIAL(info) << "set_on_local_connect_fn: state = " << state;
+                            }
+
+                            obj->set_lan_mode_connection_state(false);
+                        }
+                        else {
+                            if (state == ConnectStatus::ConnectStatusOk) {
+                                event.SetInt(1);
+                                event.SetString(obj->get_dev_id());
+                            }
+                            else if(msg == "5") {
+                                event.SetInt(5);
+                                event.SetString(obj->get_dev_id());
+                            }
+                            else {
+                                event.SetInt(-2);
+                                event.SetString(obj->get_dev_id());
+                            }
+                        }
+                    }
+                    if (wxGetApp().plater()->get_select_machine_dialog()) {
+                        wxPostEvent(wxGetApp().plater()->get_select_machine_dialog(), event);
+                    }
+                });
+            }
+        );
+
+        auto message_arrive_fn = [this](std::string dev_id, std::string msg) {
+            if (is_closing()) {
+                return;
+            }
+            CallAfter([this, dev_id, msg] {
+                if (is_closing())
+                    return;
+
+                if (process_network_msg(dev_id, msg)) {
+                    return;
+                }
+
+                if (MachineObject* obj = this->m_device_manager->get_user_machine(dev_id)) {
+                    auto sel = this->m_device_manager->get_selected_machine();
+                    if (sel && sel->get_dev_id() == dev_id) {
+                        obj->parse_json("cloud", msg);
+                        GUI::wxGetApp().sidebar().load_ams_list(obj);
+                    } else {
+                        obj->parse_json("cloud", msg, true);
+                    }
+                }
+
+                if (GUI::wxGetApp().plater())
+                    GUI::wxGetApp().plater()->update_machine_sync_status();
+            });
+        };
+
+        m_agent->set_on_message_fn(message_arrive_fn);
+
+        auto user_message_arrive_fn = [this](std::string user_id, std::string msg) {
+            if (is_closing()) {
+                return;
+            }
+            CallAfter([this, user_id, msg] {
+                if (is_closing())
+                    return;
+
+                //check user
+                if (user_id == m_agent->get_user_id()) {
+                    this->m_user_manager->parse_json(msg);
+                }
+
+            });
+        };
+
+        m_agent->set_on_user_message_fn(user_message_arrive_fn);
+
+
+        auto lan_message_arrive_fn = [this](std::string dev_id, std::string msg) {
+            if (is_closing()) {
+                return;
+            }
+            CallAfter([this, dev_id, msg] {
+                if (is_closing())
+                    return;
+
+                if (this->process_network_msg(dev_id, msg)) {
+                    return;
+                }
+
+                if (MachineObject* obj = m_device_manager->get_my_machine(dev_id)) {
+                    obj->parse_json("lan", msg);
+                    // Orca: skip it if it doesn't support subscription based filament sync
+                    if (this->m_device_manager->get_selected_machine() == obj &&
+                        m_agent->get_filament_sync_mode() == FilamentSyncMode::subscription) {
+                        GUI::wxGetApp().sidebar().load_ams_list(obj);
+                    }
+                }
+
+                if (GUI::wxGetApp().plater())
+                    GUI::wxGetApp().plater()->update_machine_sync_status();
+                });
+        };
+        m_agent->set_on_local_message_fn(lan_message_arrive_fn);
+        m_agent->set_queue_on_main_fn([this](std::function<void()> callback) {
+            CallAfter(callback);
+        });
+    }
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": exit, m_agent=%1%")%m_agent;
+}
+
+GUI_App::~GUI_App()
+{
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": enter");
+    if (app_config != nullptr) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": destroy app_config");
+        delete app_config;
+    }
+
+    if (preset_bundle != nullptr) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": destroy preset_bundle");
+        delete preset_bundle;
+    }
+
+    if (preset_updater != nullptr) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": destroy preset updater");
+        delete preset_updater;
+    }
+
+    StaticBambuLib::release();
+    BBLNetworkPlugin::shutdown();
+
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": exit");
+}
+
+bool GUI_App::is_blocking_printing(MachineObject *obj_)
+{
+    DeviceManager *dev = Slic3r::GUI::wxGetApp().getDeviceManager();
+    if (!dev) return true;
+    std::string target_model;
+    if (obj_ == nullptr) {
+        obj_ = dev->get_selected_machine();
+        if (obj_) {
+            target_model = obj_->printer_type;
+        }
+    } else {
+        target_model = obj_->printer_type;
+    }
+
+    if (!obj_)
+    {
+        return false;
+    }
+
+    PresetBundle *preset_bundle = wxGetApp().preset_bundle;
+    std::string    source_model  = preset_bundle->printers.get_edited_preset().get_printer_type(preset_bundle);
+
+    if (source_model != target_model) {
+        std::vector<std::string>      compatible_machine = obj_->get_compatible_machine();
+        vector<std::string>::iterator it                 = find(compatible_machine.begin(), compatible_machine.end(), source_model);
+        if (it == compatible_machine.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// If formatted for github, plaintext with OpenGL extensions enclosed into <details>.
+// Otherwise HTML formatted for the system info dialog.
+std::string GUI_App::get_gl_info(bool for_github)
+{
+    return OpenGLManager::get_gl_info().to_string(for_github);
+}
+
+wxGLContext* GUI_App::init_glcontext(wxGLCanvas& canvas)
+{
+    return m_opengl_mgr.init_glcontext(canvas, init_params != nullptr ? init_params->opengl_version : std::make_pair(0, 0),
+        init_params != nullptr ? init_params->opengl_compatibility_profile : false, init_params != nullptr ? init_params->opengl_debug : false);
+}
+
+bool GUI_App::init_opengl()
+{
+#ifdef __linux__
+    bool status = m_opengl_mgr.init_gl();
+    if (status)
+        m_opengl_initialized = true;
+    return status;
+#else
+    return m_opengl_mgr.init_gl();
+#endif
+}
+
+// gets path to PrusaSlicer.ini, returns semver from first line comment
+static boost::optional<Semver> parse_semver_from_ini(std::string path)
+{
+    std::ifstream stream(path);
+    std::stringstream buffer;
+    buffer << stream.rdbuf();
+    std::string body = buffer.str();
+    size_t start = body.find("OrcaSlicer ");
+    if (start == std::string::npos) {
+        start = body.find("OrcaSlicer ");
+        if (start == std::string::npos)
+            return boost::none;
+    }
+    body = body.substr(start + 12);
+    size_t end = body.find_first_of(" \n");
+    if (end < body.size())
+        body.resize(end);
+    return Semver::parse(body);
+}
+
+void GUI_App::init_download_path()
+{
+    std::string down_path = app_config->get("download_path");
+
+    if (down_path.empty()) {
+        std::string user_down_path = wxStandardPaths::Get().GetUserDir(wxStandardPaths::Dir_Downloads).ToUTF8().data();
+        app_config->set("download_path", user_down_path);
+    }
+    else {
+        fs::path dp(down_path);
+        if (!fs::exists(dp)) {
+
+            std::string user_down_path = wxStandardPaths::Get().GetUserDir(wxStandardPaths::Dir_Downloads).ToUTF8().data();
+            app_config->set("download_path", user_down_path);
+        }
+    }
+}
+
+#if wxUSE_WEBVIEW_EDGE
+void GUI_App::init_webview_runtime()
+{
+    // Check WebView Runtime
+    if (!WebView::CheckWebViewRuntime()) {
+        int nRet = wxMessageBox(_L("Orca Slicer requires the Microsoft WebView2 Runtime to operate certain features.\nClick Yes to install it now."),
+                                _L("WebView2 Runtime"), wxYES_NO);
+        if (nRet == wxYES) {
+            WebView::DownloadAndInstallWebViewRuntime();
+        }
+    }
+}
+#endif
+
+void GUI_App::init_app_config()
+{
+	// Profiles for the alpha are stored into the PrusaSlicer-alpha directory to not mix with the current release.
+    SetAppName(SLIC3R_APP_KEY);
+//	SetAppName(SLIC3R_APP_KEY "-alpha");
+//  SetAppName(SLIC3R_APP_KEY "-beta");
+//	SetAppDisplayName(SLIC3R_APP_NAME);
+
+	// Set the Slic3r data directory at the Slic3r XS module.
+	// Unix: ~/ .Slic3r
+	// Windows : "C:\Users\username\AppData\Roaming\Slic3r" or "C:\Documents and Settings\username\Application Data\Slic3r"
+	// Mac : "~/Library/Application Support/Slic3r"
+
+    if (data_dir().empty()) {
+        // Orca: check if data_dir folder exists in application folder use it if it exists
+        // Note:wxStandardPaths::Get().GetExecutablePath() return following paths
+        // Unix: /usr/local/bin/exename
+        // Windows: "C:\Programs\AppFolder\exename.exe"
+        // Mac: /Applications/exename.app/Contents/MacOS/exename
+        // TODO: have no idea what to do with Linux bundles
+        auto _app_folder = boost::filesystem::path(wxStandardPaths::Get().GetExecutablePath().ToUTF8().data()).parent_path();
+#ifdef __APPLE__
+        // On macOS, the executable is inside the .app bundle.
+        _app_folder = _app_folder.parent_path().parent_path().parent_path();
+#endif
+        boost::filesystem::path app_data_dir_path = _app_folder / "data_dir";
+        if (boost::filesystem::exists(app_data_dir_path)) {
+            set_data_dir(app_data_dir_path.string());
+        }
+        else{
+            boost::filesystem::path data_dir_path;
+            #ifndef __linux__
+                std::string data_dir = wxStandardPaths::Get().GetUserDataDir().ToUTF8().data();
+                //BBS create folder if not exists
+                data_dir_path = boost::filesystem::path(data_dir);
+                set_data_dir(data_dir);
+            #else
+                // Since version 2.3, config dir on Linux is in ${XDG_CONFIG_HOME}.
+                // https://github.com/prusa3d/PrusaSlicer/issues/2911
+                wxString dir;
+                if (! wxGetEnv(wxS("XDG_CONFIG_HOME"), &dir) || dir.empty() )
+                    dir = wxFileName::GetHomeDir() + wxS("/.config");
+                data_dir_path = boost::filesystem::path((dir + "/" + GetAppName()).ToUTF8().data());
+                migrate_flatpak_legacy_datadir(data_dir_path);
+                set_data_dir(data_dir_path.string());
+            #endif
+            if (!boost::filesystem::exists(data_dir_path)){
+                boost::filesystem::create_directory(data_dir_path);
+            }
+        }
+
+        // Change current dirtory of application
+
+#ifdef _WIN32
+    [[maybe_unused]] auto unused_result = _chdir(encode_path((Slic3r::data_dir() + "/log").c_str()).c_str());
+#else
+    [[maybe_unused]] auto unused_result = chdir(encode_path((Slic3r::data_dir() + "/log").c_str()).c_str());
+#endif
+
+    } else {
+        m_datadir_redefined = true;
+    }
+
+    // start log here
+    std::time_t       t        = std::time(0);
+    std::tm *         now_time = std::localtime(&t);
+    std::stringstream buf;
+    buf << std::put_time(now_time, "debug_%a_%b_%d_%H_%M_%S_");
+    buf << get_current_pid() << ".log";
+    std::string log_filename = buf.str();
+#if !BBL_RELEASE_TO_PUBLIC
+    set_log_path_and_level(log_filename, 5);
+#else
+    set_log_path_and_level(log_filename, 3);
+#endif
+
+    BOOST_LOG_TRIVIAL(info) << boost::format("gui mode, Current OrcaSlicer Version %1% build %2%") % SoftFever_VERSION % GIT_COMMIT_HASH;
+
+    //BBS: remove GCodeViewer as seperate APP logic
+	if (!app_config)
+        app_config = new AppConfig();
+        //app_config = new AppConfig(is_editor() ? AppConfig::EAppMode::Editor : AppConfig::EAppMode::GCodeViewer);
+
+    m_config_corrupted = false;
+	// load settings
+	m_app_conf_exists = app_config->exists();
+	if (m_app_conf_exists) {
+        std::string error = app_config->load();
+        if (!error.empty()) {
+            // Orca: if the config file is corrupted, we will show a error dialog and create a default config file.
+            m_config_corrupted = true;
+
+        }
+        // Save orig_version here, so its empty if no app_config existed before this run.
+        m_last_config_version = app_config->orig_version();//parse_semver_from_ini(app_config->config_path());
+    }
+    else {
+#ifdef _WIN32
+        // update associate files from registry information
+        if (is_associate_files(L"3mf")) {
+            app_config->set("associate_3mf", "true");
+        }
+        if (is_associate_files(L"stl")) {
+            app_config->set("associate_stl", "true");
+        }
+        if (is_associate_files(L"step") && is_associate_files(L"stp")) {
+            app_config->set("associate_step", "true");
+        }
+#endif // _WIN32
+    }
+    set_logging_level(Slic3r::level_string_to_boost(app_config->get("log_severity_level")));
+
+}
+
+// returns true if found newer version and user agreed to use it
+bool GUI_App::check_older_app_config(Semver current_version, bool backup)
+{
+    //BBS: current no need these logic
+    return false;
+}
+
+void GUI_App::copy_older_config()
+{
+    preset_bundle->copy_files(m_older_data_dir_path);
+}
+
+std::map<std::string, std::string> GUI_App::get_extra_header()
+{
+    std::map<std::string, std::string> extra_headers;
+    extra_headers.insert(std::make_pair("X-BBL-Client-Type", "slicer"));
+    extra_headers.insert(std::make_pair("X-BBL-Client-Name",
+#if defined(__WINDOWS__)
+        Slic3r::PJarczakLinuxBridge::enabled() ? std::string("BambuStudio") : std::string(SLIC3R_APP_NAME)
+#else
+        std::string(SLIC3R_APP_NAME)
+#endif
+    ));
+    extra_headers.insert(std::make_pair("X-BBL-Client-Version", VersionInfo::convert_full_version(SLIC3R_VERSION)));
+#if defined(__WINDOWS__)
+    if (Slic3r::PJarczakLinuxBridge::enabled()) {
+        extra_headers.insert(std::make_pair("X-BBL-OS-Type", Slic3r::PJarczakLinuxBridge::forced_download_os_type()));
+    }
+#ifdef _M_X64
+    else {
+        extra_headers.insert(std::make_pair("X-BBL-OS-Type", "windows"));
+    }
+#else
+    else {
+        extra_headers.insert(std::make_pair("X-BBL-OS-Type", "windows_arm"));
+    }
+#endif
+#elif defined(__APPLE__)
+    extra_headers.insert(std::make_pair("X-BBL-OS-Type", "macos"));
+#elif defined(__LINUX__)
+    extra_headers.insert(std::make_pair("X-BBL-OS-Type", "linux"));
+#endif
+    int major = 0, minor = 0, micro = 0;
+    wxGetOsVersion(&major, &minor, &micro);
+    std::string os_version = (boost::format("%1%.%2%.%3%") % major % minor % micro).str();
+    extra_headers.insert(std::make_pair("X-BBL-OS-Version", os_version));
+    if (app_config)
+        extra_headers.insert(std::make_pair("X-BBL-Device-ID", app_config->get("slicer_uuid")));
+    extra_headers.insert(std::make_pair("X-BBL-Language", convert_studio_language_to_api(into_u8(current_language_code_safe()))));
+    return extra_headers;
+}
+
+//BBS
+void GUI_App::init_http_extra_header()
+{
+    std::map<std::string, std::string> extra_headers = get_extra_header();
+
+    if (m_agent)
+        m_agent->set_extra_http_header(extra_headers);
+}
+
+void GUI_App::update_http_extra_header()
+{
+    std::map<std::string, std::string> extra_headers = get_extra_header();
+    Slic3r::Http::set_extra_headers(extra_headers);
+    if (m_agent)
+        m_agent->set_extra_http_header(extra_headers);
+}
+
+void GUI_App::on_start_subscribe_again(std::string dev_id)
+{
+    auto start_subscribe_timer = new wxTimer(this, wxID_ANY);
+    Bind(wxEVT_TIMER, [this, start_subscribe_timer, dev_id](auto& e) {
+        start_subscribe_timer->Stop();
+        Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
+        if (!dev) return;
+        MachineObject* obj = dev->get_selected_machine();
+        if (!obj) return;
+
+        if ( (dev_id == obj->get_dev_id()) && obj->is_connecting() && obj->subscribe_counter > 0) {
+            obj->subscribe_counter--;
+            if(wxGetApp().getAgent()) wxGetApp().getAgent()->set_user_selected_machine(dev_id);
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": dev_id=" << obj->get_dev_id();
+        }
+    });
+    start_subscribe_timer->Start(5000, wxTIMER_ONE_SHOT);
+}
+
+std::string GUI_App::get_local_models_path()
+{
+    std::string local_path = "";
+    if (data_dir().empty()) {
+        return local_path;
+    }
+
+    auto models_folder = (boost::filesystem::path(data_dir()) / "models");
+    local_path = models_folder.string();
+
+    if (!fs::exists(models_folder)) {
+        if (!fs::create_directory(models_folder)) {
+            local_path = "";
+        }
+        BOOST_LOG_TRIVIAL(info) << "create models folder:" << models_folder.string();
+    }
+    return local_path;
+}
+
+void GUI_App::init_single_instance_checker(const std::string &name, const std::string &path)
+{
+    BOOST_LOG_TRIVIAL(debug) << "init wx instance checker " << name << " "<< path;
+    m_single_instance_checker = std::make_unique<wxSingleInstanceChecker>(boost::nowide::widen(name), boost::nowide::widen(path));
+}
+
+bool GUI_App::OnInit()
+{
+    try {
+        return on_init_inner();
+    } catch (const std::exception& e) {
+        BOOST_LOG_TRIVIAL(fatal) << "OnInit Got Fatal error: " << e.what();
+        generic_exception_handle();
+        return false;
+    }
+}
+
+int GUI_App::OnExit()
+{
+    stop_sync_user_preset();
+
+    if (m_device_manager) {
+        delete m_device_manager;
+        m_device_manager = nullptr;
+    }
+
+    if (m_user_manager) {
+        delete m_user_manager;
+        m_user_manager = nullptr;
+    }
+
+    // Clear the printer agent cache before destroying the NetworkAgent.
+    // This disconnects all cached agents and releases their shared_ptrs,
+    // ensuring clean thread shutdown before the agent is deleted.
+    NetworkAgentFactory::clear_printer_agent_cache();
+
+    if (m_agent) {
+        // BBS avoid a crash on mac platform
+#ifdef __WINDOWS__
+        m_agent->start_discovery(false, false);
+#endif
+        delete m_agent;
+        m_agent = nullptr;
+    }
+
+    // Orca: clean up encrypted bbl network log file if plugin is used
+    // No point to keep them as they are encrypted and can't be used for debugging
+    try {
+        auto              log_folder  = boost::filesystem::path(data_dir()) / "log";
+        const std::string filePattern = R"(debug_network_.*\.log\.enc)";
+        std::regex        pattern(filePattern);
+        if (boost::filesystem::exists(log_folder)) {
+            std::vector<boost::filesystem::path> network_logs;
+            for (auto& it : boost::filesystem::directory_iterator(log_folder)) {
+                auto temp_path = it.path();
+                if (boost::filesystem::is_regular_file(temp_path) && std::regex_match(temp_path.filename().string(), pattern)) {
+                    network_logs.push_back(temp_path.filename());
+                }
+            }
+            for (auto f : network_logs) {
+                boost::filesystem::remove(f);
+            }
+        }
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << "Failed to clean up encrypt bbl network log file";
+    }
+
+    return wxApp::OnExit();
+}
+
+class wxBoostLog : public wxLog
+{
+    void DoLogText(const wxString &msg) override {
+
+        BOOST_LOG_TRIVIAL(warning) << msg.ToUTF8().data();
+    }
+    ~wxBoostLog() override
+    {
+        // This is a hack. Prevent thread logs from going to wxGuiLog on app quit.
+        auto t = wxLog::SetActiveTarget(this);
+        wxLog::FlushActive();
+        wxLog::SetActiveTarget(t);
+    }
+};
+
+std::string get_system_info()
+{
+    std::stringstream out;
+
+    std::string b_start  = "";
+    std::string b_end    = "";
+    std::string line_end = "\n";
+
+    out << b_start << "Operating System:    " << b_end << wxPlatformInfo::Get().GetOperatingSystemFamilyName() << line_end;
+    out << b_start << "System Architecture: " << b_end << wxPlatformInfo::Get().GetBitnessName() << line_end;
+    out << b_start <<
+#if defined _WIN32
+        "Windows Version:     "
+#else
+        // Hopefully some kind of unix / linux.
+        "System Version:      "
+#endif
+        << b_end << wxPlatformInfo::Get().GetOperatingSystemDescription() << line_end;
+    out << b_start << "Total RAM size [MB]: " << b_end << Slic3r::format_memsize_MB(Slic3r::total_physical_memory());
+
+    return out.str();
+}
+
+bool GUI_App::on_init_inner()
+{
+    wxLog::SetActiveTarget(new wxBoostLog());
+#if BBL_RELEASE_TO_PUBLIC
+    wxLog::SetLogLevel(wxLOG_Message);
+#endif
+
+    ::Label::initSysFont();
+
+    // Set initialization of image handlers before any UI actions - See GH issue #7469
+    wxInitAllImageHandlers();
+#ifdef NDEBUG
+    wxImage::SetDefaultLoadFlags(0); // ignore waring in release build
+#endif
+
+#if defined(_WIN32) && ! defined(_WIN64)
+    // BBS: remove 32bit build prompt
+    // Win32 32bit build.
+#endif // _WIN64
+
+    // Forcing back menu icons under gtk2 and gtk3. Solution is based on:
+    // https://docs.gtk.org/gtk3/class.Settings.html
+    // see also https://docs.wxwidgets.org/3.0/classwx_menu_item.html#a2b5d6bcb820b992b1e4709facbf6d4fb
+    // TODO: Find workaround for GTK4
+#if defined(__WXGTK20__) || defined(__WXGTK3__)
+    g_object_set (gtk_settings_get_default (), "gtk-menu-images", TRUE, NULL);
+#endif
+
+#if defined(__WXGTK20__) || defined(__WXGTK3__)
+    // Suppress harmless GTK critical warnings from the GTK3/wxWidgets interaction.
+    // These include widget allocation on hidden widgets, events on unrealized widgets,
+    // and style context operations during widget construction (SetBackgroundColour
+    // before GTK widget realization).
+    g_log_set_handler("Gtk", G_LOG_LEVEL_CRITICAL,
+        [](const gchar *log_domain, GLogLevelFlags log_level, const gchar *message, gpointer user_data) {
+            if (message && (strstr(message, "gtk_widget_set_allocation") ||
+                            strstr(message, "WIDGET_REALIZED_FOR_EVENT") ||
+                            strstr(message, "gtk_widget_get_style_context") ||
+                            strstr(message, "gtk_style_context_add_provider")))
+                return;
+            g_log_default_handler(log_domain, log_level, message, user_data);
+        }, nullptr);
+#endif
+
+#ifdef WIN32
+    //BBS set crash log folder
+    CBaseException::set_log_folder(data_dir());
+#endif
+
+    wxGetApp().Bind(wxEVT_QUERY_END_SESSION, [this](auto & e) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< "received wxEVT_QUERY_END_SESSION";
+        if (mainframe) {
+            wxCloseEvent e2(wxEVT_CLOSE_WINDOW);
+            e2.SetCanVeto(true);
+            mainframe->GetEventHandler()->ProcessEvent(e2);
+            if (e2.GetVeto()) {
+                e.Veto();
+                return;
+            }
+        }
+        for (auto d : dialogStack)
+            d->EndModal(wxID_ABORT);
+    });
+
+    // Verify resources path
+    const wxString resources_dir = from_u8(Slic3r::resources_dir());
+    wxCHECK_MSG(wxDirExists(resources_dir), false,
+        wxString::Format(_L("Resources path does not exist or is not a directory: %s"), resources_dir));
+
+#ifdef __linux__
+    if (! check_old_linux_datadir(GetAppName())) {
+        std::cerr << "Quitting, user chose to move their data to new location." << std::endl;
+        return false;
+    }
+#endif
+
+    BOOST_LOG_TRIVIAL(info) << get_system_info();
+
+// initialize label colors and fonts
+    init_label_colours();
+    init_fonts();
+    wxGetApp().Update_dark_mode_flag();
+    
+#if defined(__WINDOWS__)
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    m_is_arm64 = false;
+    if (hKernel32) {
+        auto fnIsWow64Process2 = (LPFN_ISWOW64PROCESS2)GetProcAddress(hKernel32, "IsWow64Process2");
+        if (fnIsWow64Process2) {
+            USHORT processMachine = 0;
+            USHORT nativeMachine = 0;
+            if (fnIsWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine)) {
+                if (nativeMachine == IMAGE_FILE_MACHINE_ARM64) {//IMAGE_FILE_MACHINE_ARM64
+                    m_is_arm64 = true;
+                }
+                BOOST_LOG_TRIVIAL(info) << boost::format("processMachine architecture %1%, nativeMachine %2% m_is_arm64 %3%")%(int)(processMachine) %(int) nativeMachine %m_is_arm64;
+            }
+            else {
+                BOOST_LOG_TRIVIAL(info) << boost::format("IsWow64Process2 failed, set m_is_arm64 to %1%") %m_is_arm64;
+            }
+        }
+        else {
+            BOOST_LOG_TRIVIAL(info) << boost::format("can not find IsWow64Process2, set m_is_arm64 to %1%") %m_is_arm64;
+        }
+    }
+    else {
+        BOOST_LOG_TRIVIAL(info) << boost::format("can not find kernel32, set m_is_arm64 to %1%") %m_is_arm64;
+    }
+#endif
+    // Enable this to get the default Win32 COMCTRL32 behavior of static boxes.
+//    wxSystemOptions::SetOption("msw.staticbox.optimized-paint", 0);
+    // Enable this to disable Windows Vista themes for all wxNotebooks. The themes seem to lead to terrible
+    // performance when working on high resolution multi-display setups.
+//    wxSystemOptions::SetOption("msw.notebook.themed-background", 0);
+
+//     Slic3r::debugf "wxWidgets version %s, Wx version %s\n", wxVERSION_STRING, wxVERSION;
+    if (is_editor()) {
+        std::string msg = Slic3r::Http::tls_global_init();
+        std::string ssl_cert_store = app_config->get("tls_accepted_cert_store_location");
+        bool ssl_accept = app_config->get("tls_cert_store_accepted") == "yes" && ssl_cert_store == Slic3r::Http::tls_system_cert_store();
+
+        if (!msg.empty() && !ssl_accept) {
+            RichMessageDialog
+                dlg(nullptr,
+                    wxString::Format(_L("%s\nDo you want to continue?"), msg),
+                    "OrcaSlicer", wxICON_QUESTION | wxYES_NO);
+            dlg.ShowCheckBox(_L("Remember my choice"));
+            if (dlg.ShowModal() != wxID_YES) return false;
+
+            app_config->set("tls_cert_store_accepted",
+                dlg.IsCheckBoxChecked() ? "yes" : "no");
+            app_config->set("tls_accepted_cert_store_location",
+                dlg.IsCheckBoxChecked() ? Slic3r::Http::tls_system_cert_store() : "");
+        }
+    }
+
+    // !!! Initialization of UI settings as a language, application color mode, fonts... have to be done before first UI action.
+    // Like here, before the show InfoDialog in check_older_app_config()
+
+    // If load_language() fails, the application closes.
+    load_language(wxString(), true);
+#ifdef _MSW_DARK_MODE
+
+#ifndef __WINDOWS__
+    wxSystemAppearance app = wxSystemSettings::GetAppearance();
+    GUI::wxGetApp().app_config->set("dark_color_mode", app.IsDark() ? "1" : "0");
+    GUI::wxGetApp().app_config->save();
+#endif // __APPLE__
+
+
+    bool init_dark_color_mode = dark_mode();
+    bool init_sys_menu_enabled = app_config->get("sys_menu_enabled") == "1";
+#ifdef __WINDOWS__
+     // Inform wxWidgets 3.3's dark mode system so it tracks NppDarkMode's state.
+     // Must be called before NppDarkMode::InitDarkMode() so that NppDarkMode's
+     // SetPreferredAppMode(ForceDark) overrides the AllowDark state set here.
+     // Orca: todo switch to native dark mode support in wxWidgets and remove NppDarkMode
+     MSWEnableDarkMode(DarkMode_Auto);
+     NppDarkMode::InitDarkMode(init_dark_color_mode, init_sys_menu_enabled);
+#endif // __WINDOWS__
+
+#endif
+
+
+#ifdef _MSW_DARK_MODE
+    // app_config can be updated in check_older_app_config(), so check if dark_color_mode and sys_menu_enabled was changed
+    if (bool new_dark_color_mode = dark_mode();
+        init_dark_color_mode != new_dark_color_mode) {
+
+#ifdef __WINDOWS__
+        NppDarkMode::SetDarkMode(new_dark_color_mode);
+#endif // __WINDOWS__
+
+        init_label_colours();
+        //update_label_colours_from_appconfig();
+    }
+    if (bool new_sys_menu_enabled = app_config->get("sys_menu_enabled") == "1";
+        init_sys_menu_enabled != new_sys_menu_enabled)
+#ifdef __WINDOWS__
+        NppDarkMode::SetSystemMenuForApp(new_sys_menu_enabled);
+#endif
+#endif
+
+    if (m_last_config_version) {
+        int last_major = m_last_config_version->maj();
+        int last_minor = m_last_config_version->min();
+        int last_patch = m_last_config_version->patch()/100;
+        std::string studio_ver = SLIC3R_VERSION;
+        int cur_major = atoi(studio_ver.substr(0,2).c_str());
+        int cur_minor = atoi(studio_ver.substr(3,2).c_str());
+        int cur_patch = atoi(studio_ver.substr(6,2).c_str());
+        BOOST_LOG_TRIVIAL(info) << boost::format("last app version {%1%.%2%.%3%}, current version {%4%.%5%.%6%}")
+            %last_major%last_minor%last_patch%cur_major%cur_minor%cur_patch;
+        if ((last_major != cur_major)
+            ||(last_minor != cur_minor)
+            ||(last_patch != cur_patch)) {
+            remove_old_networking_plugins();
+        }
+    }
+
+    if(app_config->get("version") != SLIC3R_VERSION) {
+        app_config->set("version", SLIC3R_VERSION);
+    }
+
+    SplashScreen * scrn = nullptr;
+    if (app_config->get("show_splash_screen") == "true") {
+        // make a bitmap with dark grey banner on the left side
+        //BBS make BBL splash screen bitmap
+        wxBitmap bmp = SplashScreen::MakeBitmap();
+        // Detect position (display) to show the splash screen
+        // Now this position is equal to the mainframe position
+        wxPoint splashscreen_pos = wxDefaultPosition;
+        if (app_config->has("window_mainframe")) {
+            auto metrics = WindowMetrics::deserialize(app_config->get("window_mainframe"));
+            if (metrics)
+                splashscreen_pos = metrics->get_rect().GetPosition();
+        }
+
+        BOOST_LOG_TRIVIAL(info) << "begin to show the splash screen...";
+        //BBS use BBL splashScreen
+        scrn = new SplashScreen(bmp, wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, splashscreen_pos);
+        wxYield();
+        scrn->SetText(_L("Loading configuration")+ dots);
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "loading systen presets...";
+    preset_bundle = new PresetBundle();
+
+    // just checking for existence of Slic3r::data_dir is not enough : it may be an empty directory
+    // supplied as argument to --datadir; in that case we should still run the wizard
+    preset_bundle->setup_directories();
+
+
+    if (m_init_app_config_from_older)
+        copy_older_config();
+
+    if (is_editor()) {
+#ifdef __WXMSW__
+        if (app_config->get("associate_3mf") == "true")
+            associate_files(L"3mf");
+        if (app_config->get("associate_stl") == "true")
+            associate_files(L"stl");
+        if (app_config->get("associate_step") == "true") {
+            associate_files(L"step");
+            associate_files(L"stp");
+        }
+        associate_url(L"orcaslicer");
+
+        if (app_config->get("associate_gcode") == "true")
+            associate_files(L"gcode");
+#endif // __WXMSW__
+
+        preset_updater = new PresetUpdater();
+        Bind(EVT_SLIC3R_VERSION_ONLINE, [this](const wxCommandEvent& evt) {
+            if (this->plater_ != nullptr) {
+                // this->plater_->get_notification_manager()->push_notification(NotificationType::NewAppAvailable);
+                //BBS show msg box to download new version
+               /* wxString tips = wxString::Format(_L("Click to download new version in default browser: %s"), version_info.version_str);
+                DownloadDialog dialog(this->mainframe,
+                    tips,
+                    _L("New version of Orca Slicer"),
+                    false,
+                    wxCENTER | wxICON_INFORMATION);
+
+
+                dialog.SetExtendedMessage(extmsg);*/
+                std::string skip_version_str = this->app_config->get("app", "skip_version");
+                bool skip_this_version = false;
+                if (!skip_version_str.empty()) {
+                    BOOST_LOG_TRIVIAL(info) << "new version = " << version_info.version_str << ", skip version = " << skip_version_str;
+                    if (version_info.version_str <= skip_version_str) {
+                        skip_this_version = true;
+                    } else {
+                        app_config->set("skip_version", "");
+                        skip_this_version = false;
+                    }
+                }
+                if (!skip_this_version
+                    || evt.GetInt() != 0) {
+                    UpdateVersionDialog dialog(this->mainframe);
+                    wxString            extmsg = wxString::FromUTF8(version_info.description);
+                    dialog.update_version_info(extmsg, version_info.version_str);
+                    //dialog.update_version_info(version_info.description);
+                    if (evt.GetInt() != 0) {
+                        dialog.m_button_skip_version->Hide();
+                    }
+                    switch (dialog.ShowModal())
+                    {
+                    case wxID_YES:
+                        wxLaunchDefaultBrowser(version_info.url);
+                        break;
+                    case wxID_NO:
+                        break;
+                    default:
+                        ;
+                    }
+                }
+            }
+            });
+
+        Bind(EVT_ENTER_FORCE_UPGRADE, [this](const wxCommandEvent& evt) {
+                wxString      version_str = wxString::FromUTF8(this->app_config->get("upgrade", "version"));
+                wxString      description_text = wxString::FromUTF8(this->app_config->get("upgrade", "description"));
+                std::string   download_url = this->app_config->get("upgrade", "url");
+                wxString tips = wxString::Format(_L("Click to download new version in default browser: %s"), version_str);
+                DownloadDialog dialog(this->mainframe,
+                    tips,
+                    _L("The Orca Slicer needs an upgrade"),
+                    false,
+                    wxCENTER | wxICON_INFORMATION);
+                dialog.SetExtendedMessage(description_text);
+
+                int result = dialog.ShowModal();
+                switch (result)
+                {
+                 case wxID_YES:
+                     wxLaunchDefaultBrowser(download_url);
+                     break;
+                 case wxID_NO:
+                     wxGetApp().mainframe->Close(true);
+                     break;
+                 default:
+                     wxGetApp().mainframe->Close(true);
+                }
+            });
+
+        Bind(EVT_SHOW_NO_NEW_VERSION, [this](const wxCommandEvent& evt) {
+            wxString msg = _L("This is the newest version.");
+            InfoDialog dlg(nullptr, _L("Info"), msg);
+            dlg.ShowModal();
+        });
+
+        Bind(EVT_SHOW_DIALOG, [this](const wxCommandEvent& evt) {
+            wxString msg = evt.GetString();
+            InfoDialog dlg(this->mainframe, _L("Info"), msg);
+            dlg.Bind(wxEVT_DESTROY, [this](auto& e) {
+                m_info_dialog_content = wxEmptyString;
+            });
+            dlg.ShowModal();
+        });
+    }
+    else {
+#ifdef __WXMSW__
+        if (app_config->get("associate_gcode") == "true")
+            associate_files(L"gcode");
+#endif // __WXMSW__
+    }
+
+    // Suppress the '- default -' presets.
+    preset_bundle->set_default_suppressed(true);
+
+    preset_bundle->backup_user_folder();
+
+    Bind(EVT_UPDATE_MACHINE_LIST, &GUI_App::on_update_machine_list, this);
+    Bind(EVT_USER_LOGIN, &GUI_App::on_user_login, this);
+    Bind(EVT_USER_LOGIN_HANDLE, &GUI_App::on_user_login_handle, this);
+    Bind(EVT_CHECK_PRIVACY_VER, &GUI_App::on_check_privacy_update, this);
+    Bind(EVT_CHECK_PRIVACY_SHOW, &GUI_App::show_check_privacy_dlg, this);
+
+    Bind(EVT_SHOW_IP_DIALOG, &GUI_App::show_ip_address_enter_dialog_handler, this);
+
+
+    std::map<std::string, std::string> extra_headers = get_extra_header();
+    Slic3r::Http::set_extra_headers(extra_headers);
+
+    // Orca: select network plugin version based on configured version string
+    std::string configured_version = get_latest_network_version();
+    if (app_config) {
+        std::string stored_version = app_config->get_network_plugin_version();
+        if (stored_version != configured_version) {
+            BOOST_LOG_TRIVIAL(info) << "Forcing network plugin version to latest: " << configured_version << " (was " << stored_version << ")";
+            app_config->set(SETTING_NETWORK_PLUGIN_VERSION, configured_version);
+            app_config->save();
+        }
+    }
+    NetworkAgent::use_legacy_network = false;
+    BOOST_LOG_TRIVIAL(info) << "Network plugin mode: modern (version: " << configured_version << ")";
+    // Force legacy network plugin if debugger attached
+    // See https://github.com/bambulab/BambuStudio/issues/6726
+    /* if (!NetworkAgent::use_legacy_network) {
+        bool debugger_attached = false;
+#if defined(__WINDOWS__)
+        debugger_attached = IsDebuggerPresent();
+#elif defined(__WXOSX__) || defined(__linux__)
+        debugger_attached = is_debugger_present();
+#endif
+        if (debugger_attached) {
+            NetworkAgent::use_legacy_network = true;
+            wxMessageBox("Force using legacy bambu networking plugin because debugger is attached! If the app terminates itself immediately, please delete installed plugin and try again!");
+        }
+    } */
+    copy_network_if_available();
+#ifdef WIN32
+    if (Slic3r::PJarczakLinuxBridge::enabled()) {
+        const boost::filesystem::path plugin_folder = boost::filesystem::path(data_dir()) / "plugins";
+        const boost::filesystem::path plugin_cache_dir = boost::filesystem::path(data_dir()) / "ota";
+        pjarczak_verify_or_install_windows_bridge_runtime(plugin_folder, plugin_cache_dir);
+    }
+#endif
+    on_init_network();
+
+    if (m_agent && m_agent->is_user_login()) {
+        enable_user_preset_folder(true);
+    } else {
+        enable_user_preset_folder(false);
+    }
+
+    // BBS if load user preset failed
+    //if (loaded_preset_result != 0) {
+        try {
+            // Enable all substitutions (in both user and system profiles), but log the substitutions in user profiles only.
+            // If there are substitutions in system profiles, then a "reconfigure" event shall be triggered, which will force
+            // installation of a compatible system preset, thus nullifying the system preset substitutions.
+            init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
+        }
+        catch (const std::exception& ex) {
+            show_error(nullptr, ex.what());
+        }
+    //}
+
+#ifdef WIN32
+    register_win32_device_notification_event();
+#endif // WIN32
+
+    // Let the libslic3r know the callback, which will translate messages on demand.
+    Slic3r::I18N::set_translate_callback(libslic3r_translate_callback);
+
+#if defined(__WXGTK__) && wxHAS_EGL
+    // Configure GL backend before any wxGLCanvas is created.
+    // On X11, prefer GLX for maximum driver compatibility.
+    // On Wayland, EGL is used by default (only option).
+    if (Slic3r::GUI::is_running_on_x11()) {
+        wxGLCanvas::PreferGLX();
+        BOOST_LOG_TRIVIAL(info) << "X11 detected, using GLX for OpenGL context";
+    } else if (Slic3r::GUI::is_running_on_wayland()) {
+        BOOST_LOG_TRIVIAL(info) << "Wayland detected, using EGL for OpenGL context";
+    } else {
+        BOOST_LOG_TRIVIAL(warning) << "Unknown display backend, defaulting to EGL";
+    }
+#endif
+
+    BOOST_LOG_TRIVIAL(info) << "create the main window";
+    mainframe = new MainFrame();
+    // hide settings tabs after first Layout
+    if (is_editor()) {
+        mainframe->select_tab(size_t(0));
+    }
+
+    sidebar().obj_list()->init();
+    //sidebar().aux_list()->init_auxiliary();
+    mainframe->m_project->init_auxiliary();
+
+//     update_mode(); // !!! do that later
+    SetTopWindow(mainframe);
+
+    plater_->init_notification_manager();
+
+    m_printhost_job_queue.reset(new PrintHostJobQueue(mainframe->printhost_queue_dlg()));
+
+    if (is_gcode_viewer()) {
+        mainframe->update_layout();
+        if (plater_ != nullptr)
+            // ensure the selected technology is ptFFF
+            plater_->set_printer_technology(ptFFF);
+    }
+    else
+        load_current_presets();
+
+    if (plater_ != nullptr) {
+        plater_->reset_project_dirty_initial_presets();
+        plater_->update_project_dirty_from_presets();
+        plater_->get_partplate_list().set_filament_count(preset_bundle->filament_presets.size());
+    }
+
+    // BBS:
+#ifdef __WINDOWS__
+    mainframe->topbar()->SaveNormalRect();
+#endif
+    mainframe->Show(true);
+    BOOST_LOG_TRIVIAL(info) << "main frame firstly shown";
+
+//#if BBL_HAS_FIRST_PAGE
+    //BBS: set tp3DEditor firstly
+    /*plater_->canvas3D()->enable_render(false);
+    mainframe->select_tab(size_t(MainFrame::tp3DEditor));
+    scrn->SetText(_L("Loading Opengl resourses..."));
+    plater_->select_view_3D("3D");
+    //BBS init the opengl resource here
+    Size canvas_size = plater_->canvas3D()->get_canvas_size();
+    wxGetApp().imgui()->set_display_size(static_cast<float>(canvas_size.get_width()), static_cast<float>(canvas_size.get_height()));
+    wxGetApp().init_opengl();
+    plater_->canvas3D()->init();
+    wxGetApp().imgui()->new_frame();
+    plater_->canvas3D()->enable_render(true);
+    plater_->canvas3D()->render();
+    if (is_editor())
+        mainframe->select_tab(size_t(0));*/
+//#else
+    //plater_->trigger_restore_project(1);
+//#endif
+
+    obj_list()->set_min_height();
+
+    update_mode(); // update view mode after fix of the object_list size
+
+#ifdef __APPLE__
+   other_instance_message_handler()->bring_instance_forward();
+#endif //__APPLE__
+
+    Bind(EVT_HTTP_ERROR, &GUI_App::on_http_error, this);
+
+
+    Bind(wxEVT_IDLE, [this](wxIdleEvent& event)
+    {
+        bool curr_studio_active = this->is_studio_active();
+        if (m_studio_active != curr_studio_active) {
+            if (curr_studio_active) {
+                BOOST_LOG_TRIVIAL(info) << "studio is active, start to subscribe";
+                if (m_agent) {
+                    json j = json::object();
+                    m_agent->start_subscribe("app");
+                }
+            } else {
+                BOOST_LOG_TRIVIAL(info) << "studio is inactive, stop to subscribe";
+                if (m_agent) {
+                    json j = json::object();
+                    m_agent->stop_subscribe("app");
+                }
+            }
+            m_studio_active = curr_studio_active;
+        }
+
+
+        if (! plater_)
+            return;
+
+        // BBS
+        //this->obj_manipul()->update_if_dirty();
+
+        //use m_post_initialized instead
+        //static bool update_gui_after_init = true;
+
+        // An ugly solution to GH #5537 in which GUI_App::init_opengl (normally called from events wxEVT_PAINT
+        // and wxEVT_SET_FOCUS before GUI_App::post_init is called) wasn't called before GUI_App::post_init and OpenGL wasn't initialized.
+//#ifdef __linux__
+//        if (!m_post_initialized && m_opengl_initialized) {
+//#else
+        if (!m_post_initialized && !m_adding_script_handler) {
+//#endif
+            m_post_initialized = true;
+#ifdef WIN32
+            this->mainframe->register_win32_callbacks();
+#endif
+            this->post_init();
+
+            update_publish_status();
+        }
+
+        if (m_post_initialized && app_config->dirty())
+            app_config->save();
+
+    });
+
+    m_initialized = true;
+
+    flush_logs();
+
+    BOOST_LOG_TRIVIAL(info) << "finished the gui app init";
+    if (m_config_corrupted) {
+        m_config_corrupted = false;
+        show_error(nullptr,
+                   _u8L(
+                       "The OrcaSlicer configuration file may be corrupted and cannot be parsed.\nOrcaSlicer has attempted to recreate the "
+                       "configuration file.\nPlease note, application settings will be lost, but printer profiles will not be affected."));
+    }
+    return true;
+}
+
+void pjarczak_set_reason(std::string* reason, std::string value)
+{
+    if (reason)
+        *reason = std::move(value);
+}
+
+static const char* pjarczak_legacy_bootstrap_script_name()
+{
+    return "pjarczak-wsl-run-host.sh";
+}
+
+static wxString pjarczak_quote_windows_arg(const wxString& value)
+{
+    wxString escaped = value;
+    escaped.Replace("\"", "\\\"");
+    return wxString::Format("\"%s\"", escaped);
+}
+
+static long pjarczak_run_hidden_windows_command(const wxString& command, wxArrayString* stdout_lines, wxArrayString* stderr_lines)
+{
+#ifdef WIN32
+    wxArrayString local_stdout;
+    wxArrayString local_stderr;
+    long exit_code = wxExecute(command, local_stdout, local_stderr, wxEXEC_SYNC | wxEXEC_HIDE_CONSOLE);
+    if (stdout_lines)
+        *stdout_lines = local_stdout;
+    if (stderr_lines)
+        *stderr_lines = local_stderr;
+    return exit_code;
+#else
+    (void)command;
+    (void)stdout_lines;
+    (void)stderr_lines;
+    return -1;
+#endif
+}
+
+static void pjarczak_log_command_output(const char* tag, long exit_code, const wxArrayString& stdout_lines, const wxArrayString& stderr_lines)
+{
+    BOOST_LOG_TRIVIAL(info) << tag << ": exit_code=" << exit_code;
+    for (const auto& line : stdout_lines)
+        BOOST_LOG_TRIVIAL(info) << tag << " [stdout] " << into_u8(line);
+    for (const auto& line : stderr_lines)
+        BOOST_LOG_TRIVIAL(error) << tag << " [stderr] " << into_u8(line);
+}
+
+static void pjarczak_verify_or_install_windows_bridge_runtime(const boost::filesystem::path& plugin_folder,
+                                                              const boost::filesystem::path& plugin_cache_dir)
+{
+#ifndef WIN32
+    (void)plugin_folder;
+    (void)plugin_cache_dir;
+#else
+    if (!Slic3r::PJarczakLinuxBridge::enabled())
+        return;
+
+    const auto verify_script = plugin_folder / Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name();
+    const auto install_script = plugin_folder / Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name();
+    if (!boost::filesystem::exists(verify_script) || !boost::filesystem::exists(install_script)) {
+        BOOST_LOG_TRIVIAL(warning) << "[pjarczak_runtime_setup] missing verify/install script in " << plugin_folder.string();
+        return;
+    }
+
+    const wxString plugin_dir_wx = from_u8(plugin_folder.string());
+    const wxString cache_dir_wx = from_u8(plugin_cache_dir.string());
+    const wxString verify_cmd = wxString::Format(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File %s -PackageDir %s -PluginCacheDir %s -AllowMissingLinuxPlugin",
+        pjarczak_quote_windows_arg(from_u8(verify_script.string())),
+        pjarczak_quote_windows_arg(plugin_dir_wx),
+        pjarczak_quote_windows_arg(cache_dir_wx));
+
+    wxArrayString verify_out;
+    wxArrayString verify_err;
+    long verify_code = pjarczak_run_hidden_windows_command(verify_cmd, &verify_out, &verify_err);
+    pjarczak_log_command_output("[pjarczak_runtime_verify]", verify_code, verify_out, verify_err);
+    if (verify_code == 0)
+        return;
+
+    const wxString install_cmd = wxString::Format(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File %s -PackageDir %s -PluginDir %s -PluginCacheDir %s",
+        pjarczak_quote_windows_arg(from_u8(install_script.string())),
+        pjarczak_quote_windows_arg(plugin_dir_wx),
+        pjarczak_quote_windows_arg(plugin_dir_wx),
+        pjarczak_quote_windows_arg(cache_dir_wx));
+
+    wxArrayString install_out;
+    wxArrayString install_err;
+    long install_code = pjarczak_run_hidden_windows_command(install_cmd, &install_out, &install_err);
+    pjarczak_log_command_output("[pjarczak_runtime_install]", install_code, install_out, install_err);
+
+    verify_out.clear();
+    verify_err.clear();
+    verify_code = pjarczak_run_hidden_windows_command(verify_cmd, &verify_out, &verify_err);
+    pjarczak_log_command_output("[pjarczak_runtime_verify_after_install]", verify_code, verify_out, verify_err);
+#endif
+}
+
+bool pjarczak_bridge_payload_ready(const boost::filesystem::path& plugin_folder, std::string* reason)
+{
+    if (!Slic3r::PJarczakLinuxBridge::enabled()) {
+        pjarczak_set_reason(reason, "bridge disabled");
+        return true;
+    }
+
+    const auto has_file = [&plugin_folder](const std::string& file_name) {
+        const auto candidate = plugin_folder / file_name;
+        return boost::filesystem::exists(candidate) && !boost::filesystem::is_directory(candidate);
+    };
+
+    const std::string required_files[] = {
+        Slic3r::PJarczakLinuxBridge::bridge_network_current_dir_name(),
+        Slic3r::PJarczakLinuxBridge::host_executable_file_name(),
+        std::string("pjarczak_bambu_linux_host_abi1"),
+        std::string("pjarczak_bambu_linux_host_abi0"),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_plugin_cache_subdir_file_name(),
+        Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+        Slic3r::PJarczakLinuxBridge::linux_source_library_name(),
+        std::string("ca-certificates.crt"),
+        std::string("slicer_base64.cer")
+    };
+
+    for (const std::string& file_name : required_files) {
+        if (!has_file(file_name)) {
+            pjarczak_set_reason(reason, "missing required runtime file: " + file_name);
+            return false;
+        }
+    }
+
+    if (!has_file(Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name()) &&
+        !has_file("pjarczak-install-wsl-runtime.ps1")) {
+        pjarczak_set_reason(reason, "missing required runtime file: " + Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name());
+        return false;
+    }
+
+    if (!has_file(Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name()) &&
+        !has_file(pjarczak_legacy_bootstrap_script_name())) {
+        pjarczak_set_reason(reason, "missing required runtime file: " + Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name());
+        return false;
+    }
+
+    for (const std::string& file_name : {
+            Slic3r::PJarczakLinuxBridge::linux_network_library_name(),
+            Slic3r::PJarczakLinuxBridge::linux_source_library_name()}) {
+        std::string validate_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_so_binary((plugin_folder / file_name).string(), &validate_reason)) {
+            pjarczak_set_reason(reason, file_name + ": " + validate_reason);
+            return false;
+        }
+    }
+
+    const auto manifest_path = plugin_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name();
+    if (boost::filesystem::exists(manifest_path) && !boost::filesystem::is_directory(manifest_path)) {
+        std::string manifest_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_set_against_manifest(plugin_folder, &manifest_reason)) {
+            pjarczak_set_reason(reason, "linux payload manifest validation failed: " + manifest_reason);
+            return false;
+        }
+    }
+
+    for (const std::string& file_name : {std::string("liblive555.so"), std::string("libagora_rtc_sdk.so"), std::string("libagora-fdkaac.so")}) {
+        if (!has_file(file_name))
+            continue;
+        std::string validate_reason;
+        if (!Slic3r::PJarczakLinuxBridge::validate_linux_so_binary((plugin_folder / file_name).string(), &validate_reason)) {
+            pjarczak_set_reason(reason, file_name + ": " + validate_reason);
+            return false;
+        }
+    }
+
+    pjarczak_set_reason(reason, "ok");
+    return true;
+}
+
+void pjarczak_copy_runtime_file_if_exists(const boost::filesystem::path& src_dir,
+                                          const boost::filesystem::path& dst_dir,
+                                          const std::string& file_name)
+{
+    if (file_name.empty())
+        return;
+
+    const auto src = src_dir / file_name;
+    const auto dst = dst_dir / file_name;
+
+    if (!boost::filesystem::exists(src) || boost::filesystem::is_directory(src))
+        return;
+
+    boost::filesystem::create_directories(dst.parent_path());
+
+    std::string error_message;
+    CopyFileResult cfr = copy_file(src.string(), dst.string(), error_message, false);
+    if (cfr != CopyFileResult::SUCCESS) {
+        BOOST_LOG_TRIVIAL(error) << "[copy_network_if_available] copy runtime file failed: "
+                                 << src.string() << " -> "
+                                 << dst.string() << ", code=" << cfr
+                                 << ", err=" << error_message;
+        return;
+    }
+
+#ifndef WIN32
+    static constexpr const auto perms =
+        fs::owner_read | fs::owner_write | fs::group_read | fs::others_read |
+        fs::owner_exe | fs::group_exe | fs::others_exe;
+    try {
+        fs::permissions(dst, perms);
+    } catch (...) {}
+#endif
+}
+
+void pjarczak_copy_local_overlay_runtime(const boost::filesystem::path& plugin_folder)
+{
+    if (!Slic3r::PJarczakLinuxBridge::enabled())
+        return;
+
+    const boost::filesystem::path exe_path(into_u8(wxStandardPaths::Get().GetExecutablePath()));
+    const boost::filesystem::path exe_dir = exe_path.parent_path();
+
+    const std::string helper_files[] = {
+        Slic3r::PJarczakLinuxBridge::windows_wsl_distro_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_import_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_validate_script_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_bootstrap_script_file_name(),
+        pjarczak_legacy_bootstrap_script_name(),
+        Slic3r::PJarczakLinuxBridge::windows_wsl_rootfs_file_name(),
+        Slic3r::PJarczakLinuxBridge::windows_plugin_cache_subdir_file_name(),
+        "install_runtime.cmd",
+        "README_runtime_bridge.txt",
+        "assemble_windows_runtime_bundle.ps1"
+    };
+
+    const boost::filesystem::path candidate_dirs[] = {
+        exe_dir,
+        exe_dir / "plugins"
+    };
+
+    for (const auto& candidate_dir : candidate_dirs) {
+        if (!boost::filesystem::exists(candidate_dir) || !boost::filesystem::is_directory(candidate_dir))
+            continue;
+
+        for (const std::string& file_name : helper_files)
+            pjarczak_copy_runtime_file_if_exists(candidate_dir, plugin_folder, file_name);
+
+        try {
+            for (auto& dir_entry : boost::filesystem::directory_iterator(candidate_dir)) {
+                if (!boost::filesystem::is_regular_file(dir_entry.path()))
+                    continue;
+                const std::string file_name = dir_entry.path().filename().string();
+                if (!Slic3r::PJarczakLinuxBridge::is_overlay_runtime_filename(file_name))
+                    continue;
+                pjarczak_copy_runtime_file_if_exists(candidate_dir, plugin_folder, file_name);
+            }
+        } catch (...) {}
+    }
+
+    const auto runtime_dst_dir = plugin_folder / "pjarczak_bambu_linux_host.runtime";
+    if (boost::filesystem::exists(runtime_dst_dir) && boost::filesystem::is_directory(runtime_dst_dir)) {
+        try {
+            boost::filesystem::remove_all(runtime_dst_dir);
+        } catch (...) {}
+    }
+}
+
+void GUI_App::copy_network_if_available()
+{
+    std::string data_dir_str = data_dir();
+    boost::filesystem::path data_dir_path(data_dir_str);
+    auto plugin_folder = data_dir_path / "plugins";
+    auto cache_folder = data_dir_path / "ota";
+    std::string changelog_file = cache_folder.string() + "/network_plugins.json";
+
+    if (!boost::filesystem::exists(plugin_folder))
+        boost::filesystem::create_directory(plugin_folder);
+
+    pjarczak_copy_local_overlay_runtime(plugin_folder);
+
+    if (app_config->get("update_network_plugin") != "true")
+        return;
+
+    std::string cached_version;
+    if (boost::filesystem::exists(changelog_file)) {
+        try {
+            boost::nowide::ifstream ifs(changelog_file);
+            json j;
+            ifs >> j;
+            if (j.contains("version"))
+                cached_version = j["version"];
+        } catch (nlohmann::detail::parse_error&) {}
+    }
+
+    const bool pj_force_linux_payload = Slic3r::PJarczakLinuxBridge::enabled();
+    std::string error_message;
+
+    auto copy_one = [&](const boost::filesystem::path& src, const boost::filesystem::path& dst) -> bool {
+        CopyFileResult cfr = copy_file(src.string(), dst.string(), error_message, false);
+        if (cfr != CopyFileResult::SUCCESS) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": Copying failed(" << cfr << "): " << error_message;
+            return false;
+        }
+        static constexpr const auto perms = fs::owner_read | fs::owner_write | fs::group_read | fs::others_read |
+                                            fs::owner_exe | fs::group_exe | fs::others_exe;
+        try { fs::permissions(dst, perms); } catch (...) {}
+        return true;
+    };
+
+    if (pj_force_linux_payload) {
+        if (!boost::filesystem::exists(cache_folder)) {
+            try {
+                boost::filesystem::create_directories(cache_folder);
+            } catch (...) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to create linux payload cache folder: " << cache_folder.string();
+                return;
+            }
+        }
+
         bool copy_failed = false;
         try {
             for (auto& dir_entry : boost::filesystem::directory_iterator(cache_folder)) {
@@ -1273,26 +3503,27 @@ int GUI_App::download_plugin(std::string name, std::string package_name, Install
                     copy_failed = true;
                     break;
                 }
+
+                try {
+                    fs::remove(path);
+                } catch (...) {}
             }
 
             pjarczak_copy_local_overlay_runtime(plugin_folder);
-
-            if (!copy_failed && boost::filesystem::exists(cache_folder))
-                fs::remove_all(cache_folder);
         } catch (...) {
             copy_failed = true;
         }
 
-        if (copy_failed) {
-            const bool bridge_ready =
-                boost::filesystem::exists(plugin_folder / Slic3r::PJarczakLinuxBridge::bridge_network_current_dir_name()) &&
-                boost::filesystem::exists(plugin_folder / Slic3r::PJarczakLinuxBridge::linux_network_library_name()) &&
-                boost::filesystem::exists(plugin_folder / Slic3r::PJarczakLinuxBridge::linux_source_library_name()) &&
-                boost::filesystem::exists(plugin_folder / "pjarczak_bambu_linux_host_abi1") &&
-                boost::filesystem::exists(plugin_folder / "pjarczak_bambu_linux_host_abi0");
-            if (bridge_ready)
-                app_config->set("update_network_plugin", "false");
+        if (copy_failed)
             return;
+
+        const auto manifest = plugin_folder / Slic3r::PJarczakLinuxBridge::linux_payload_manifest_file_name();
+        if (boost::filesystem::exists(manifest)) {
+            std::string validate_reason;
+            if (!Slic3r::PJarczakLinuxBridge::validate_linux_payload_set_against_manifest(plugin_folder, &validate_reason)) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": manifest validation failed after copy: " << validate_reason;
+                return;
+            }
         }
 
         if (!cached_version.empty()) {
