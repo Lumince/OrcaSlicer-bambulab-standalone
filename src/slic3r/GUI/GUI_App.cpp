@@ -2974,7 +2974,7 @@ bool GUI_App::on_init_inner()
 #ifdef WIN32
     if (Slic3r::PJarczakLinuxBridge::enabled()) {
         const boost::filesystem::path plugin_folder = boost::filesystem::path(data_dir()) / "plugins";
-        const boost::filesystem::path plugin_cache_dir = boost::filesystem::path(data_dir()) / "ota";
+        const boost::filesystem::path plugin_cache_dir = boost::filesystem::path(data_dir()) / "ota" / "plugins";
         pjarczak_verify_or_install_windows_bridge_runtime(plugin_folder, plugin_cache_dir);
     }
 #endif

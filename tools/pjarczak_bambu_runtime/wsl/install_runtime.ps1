@@ -1,6 +1,7 @@
 param(
     [string]$PackageDir = "",
     [string]$PluginDir = "",
+    [string]$PluginCacheDir = "",
     [string]$DistroName = "",
     [string]$InstallDir = "",
     [switch]$ReplaceExisting,
@@ -34,10 +35,18 @@ function Convert-FileToLf([string]$Path) {
 }
 
 function Copy-IfExists([string]$Source, [string]$Destination) {
-    if (Test-Path $Source) {
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
-        Copy-Item -Force $Source $Destination
+    if (!(Test-Path $Source)) {
+        return
     }
+
+    $sourceFull = [System.IO.Path]::GetFullPath($Source)
+    $destinationFull = [System.IO.Path]::GetFullPath($Destination)
+    if ([string]::Equals($sourceFull, $destinationFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+    Copy-Item -Force $Source $Destination
 }
 
 function Sync-Directory([string]$SourceDir, [string]$DestinationDir) {
@@ -96,7 +105,11 @@ function Read-RootFsHashMarker([string]$Dir) {
 }
 
 
-function Resolve-PluginCacheDir([string]$Dir) {
+function Resolve-PluginCacheDir([string]$Dir, [string]$Current) {
+    if (-not [string]::IsNullOrWhiteSpace($Current)) {
+        return [System.IO.Path]::GetFullPath($Current.Trim())
+    }
+
     if ($env:PJARCZAK_BAMBU_WINDOWS_PLUGIN_CACHE_DIR) {
         return [System.IO.Path]::GetFullPath($env:PJARCZAK_BAMBU_WINDOWS_PLUGIN_CACHE_DIR.Trim())
     }
@@ -204,7 +217,7 @@ if ([string]::IsNullOrWhiteSpace($PackageDir)) {
 $PackageDir = [System.IO.Path]::GetFullPath($PackageDir)
 
 $DistroName = Resolve-DistroName $PackageDir $DistroName
-$PluginCacheDir = Resolve-PluginCacheDir $PackageDir
+$PluginCacheDir = Resolve-PluginCacheDir $PackageDir $PluginCacheDir
 
 if ([string]::IsNullOrWhiteSpace($PluginDir)) {
     if (-not $env:APPDATA) {

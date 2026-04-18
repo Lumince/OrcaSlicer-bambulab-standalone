@@ -208,7 +208,7 @@ jobs:
       - name: Validate live Orca plugin dir bootstrap package
         shell: pwsh
         run: |
-          & "$env:APPDATA\OrcaSlicer\plugins\verify_runtime.ps1" -PackageDir "$env:APPDATA\OrcaSlicer\plugins" -PluginCacheDir "$env:APPDATA\OrcaSlicer\ota" -AllowMissingLinuxPlugin
+          & "$env:APPDATA\OrcaSlicer\plugins\verify_runtime.ps1" -PackageDir "$env:APPDATA\OrcaSlicer\plugins" -PluginCacheDir "$env:APPDATA\OrcaSlicer\ota\plugins" -AllowMissingLinuxPlugin
 
       - name: Create installer Win
         working-directory: ${{ github.workspace }}/build
