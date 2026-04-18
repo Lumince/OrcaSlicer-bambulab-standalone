@@ -1,7 +1,6 @@
 param(
     [string]$PackageDir = "",
     [string]$PluginDir = "",
-    [string]$PluginCacheDir = "",
     [string]$DistroName = "",
     [string]$InstallDir = "",
     [switch]$ReplaceExisting,
@@ -35,18 +34,15 @@ function Convert-FileToLf([string]$Path) {
 }
 
 function Copy-IfExists([string]$Source, [string]$Destination) {
-    if (!(Test-Path $Source)) {
-        return
+    if (Test-Path $Source) {
+        $srcFull = [System.IO.Path]::GetFullPath($Source)
+        $dstFull = [System.IO.Path]::GetFullPath($Destination)
+        if ($srcFull -ieq $dstFull) {
+            return
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+        Copy-Item -Force $Source $Destination
     }
-
-    $sourceFull = [System.IO.Path]::GetFullPath($Source)
-    $destinationFull = [System.IO.Path]::GetFullPath($Destination)
-    if ([string]::Equals($sourceFull, $destinationFull, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return
-    }
-
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
-    Copy-Item -Force $Source $Destination
 }
 
 function Sync-Directory([string]$SourceDir, [string]$DestinationDir) {
@@ -125,6 +121,21 @@ function Resolve-PluginCacheDir([string]$Dir, [string]$Current) {
 
     if (-not $env:APPDATA) { throw 'APPDATA is not available' }
     return [System.IO.Path]::GetFullPath((Join-Path $env:APPDATA 'OrcaSlicer\ota\plugins'))
+}
+
+function Normalize-PluginCacheDir([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $Path
+    }
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $pluginsChild = Join-Path $full 'plugins'
+    if ((Split-Path -Leaf $full) -ieq 'ota' -and (Test-Path $pluginsChild)) {
+        return [System.IO.Path]::GetFullPath($pluginsChild)
+    }
+    if ((Test-Path $pluginsChild) -and !(Test-Path (Join-Path $full 'libbambu_networking.so')) -and !(Test-Path (Join-Path $full 'libBambuSource.so'))) {
+        return [System.IO.Path]::GetFullPath($pluginsChild)
+    }
+    return $full
 }
 
 function Read-TextAuto([string]$Path) {
@@ -217,7 +228,7 @@ if ([string]::IsNullOrWhiteSpace($PackageDir)) {
 $PackageDir = [System.IO.Path]::GetFullPath($PackageDir)
 
 $DistroName = Resolve-DistroName $PackageDir $DistroName
-$PluginCacheDir = Resolve-PluginCacheDir $PackageDir $PluginCacheDir
+$PluginCacheDir = Normalize-PluginCacheDir (Resolve-PluginCacheDir $PackageDir $PluginCacheDir)
 
 if ([string]::IsNullOrWhiteSpace($PluginDir)) {
     if (-not $env:APPDATA) {

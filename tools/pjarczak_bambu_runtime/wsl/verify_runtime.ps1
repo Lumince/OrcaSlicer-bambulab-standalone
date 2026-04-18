@@ -152,12 +152,18 @@ if ([string]::IsNullOrWhiteSpace($PluginCacheDir)) {
             }
         }
         if ([string]::IsNullOrWhiteSpace($PluginCacheDir) -and $env:APPDATA) {
-            $PluginCacheDir = Join-Path $env:APPDATA 'OrcaSlicer\ota'
+            $PluginCacheDir = Join-Path $env:APPDATA 'OrcaSlicer\ota\plugins'
         }
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($PluginCacheDir)) {
     $PluginCacheDir = [System.IO.Path]::GetFullPath($PluginCacheDir)
+    $pluginsChild = Join-Path $PluginCacheDir 'plugins'
+    if ((Split-Path -Leaf $PluginCacheDir) -ieq 'ota' -and (Test-Path $pluginsChild)) {
+        $PluginCacheDir = [System.IO.Path]::GetFullPath($pluginsChild)
+    } elseif ((Test-Path $pluginsChild) -and !(Test-Path (Join-Path $PluginCacheDir 'libbambu_networking.so')) -and !(Test-Path (Join-Path $PluginCacheDir 'libBambuSource.so'))) {
+        $PluginCacheDir = [System.IO.Path]::GetFullPath($pluginsChild)
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($DistroName)) {

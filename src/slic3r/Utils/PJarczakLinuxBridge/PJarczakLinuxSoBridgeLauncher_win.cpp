@@ -335,7 +335,7 @@ std::filesystem::path configured_plugin_cache_dir(const std::filesystem::path& p
     if (!configured_subdir.empty())
         return std::filesystem::path(appdata) / std::filesystem::path(configured_subdir);
 
-    return std::filesystem::path(appdata) / "OrcaSlicer" / "ota";
+    return std::filesystem::path(appdata) / "OrcaSlicer" / "ota" / "plugins";
 }
 
 std::string wsl_exe_path()
