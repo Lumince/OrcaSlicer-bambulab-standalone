@@ -18,6 +18,11 @@
 #include <wx/file.h>
 #include <wx/wfstream.h>
 
+#ifdef WIN32
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
 #include <boost/cast.hpp>
 #include <boost/lexical_cast.hpp>
 
@@ -35,6 +40,27 @@ using namespace nlohmann;
 namespace Slic3r { namespace GUI {
 
 namespace {
+#ifdef WIN32
+static bool pjarczak_open_external_browser(const wxString& url)
+{
+    HINSTANCE rc = ::ShellExecuteW(nullptr, L"open", url.wc_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if ((INT_PTR)rc > 32)
+        return true;
+
+    if (wxLaunchDefaultBrowser(url, wxBROWSER_NEW_WINDOW))
+        return true;
+
+    const wxString cmd = wxString::Format("explorer.exe \"%s\"", url);
+    const long code = wxExecute(cmd, wxEXEC_ASYNC | wxEXEC_HIDE_CONSOLE);
+    return code != 0;
+}
+#else
+static bool pjarczak_open_external_browser(const wxString& url)
+{
+    return wxLaunchDefaultBrowser(url, wxBROWSER_NEW_WINDOW);
+}
+#endif
+
 std::string pjarczak_browser_login_url(const std::string& host_value, const std::string& locale, const std::string& localhost_base)
 {
     std::string host = host_value;
@@ -201,7 +227,11 @@ bool ZUserLogin::run() {
             const std::string localhost = std::string(LOCALHOST_URL) + std::to_string(m_loopback_port);
             const std::string browser_url = pjarczak_browser_login_url(host, strlang.ToStdString(), localhost);
             BOOST_LOG_TRIVIAL(info) << "external login url = " << browser_url;
-            wxLaunchDefaultBrowser(wxString::FromUTF8(browser_url));
+            const wxString browser_url_wx = wxString::FromUTF8(browser_url);
+            const bool browser_opened = pjarczak_open_external_browser(browser_url_wx);
+            BOOST_LOG_TRIVIAL(info) << "external login browser_opened=" << (browser_opened ? 1 : 0);
+            if (!browser_opened)
+                BOOST_LOG_TRIVIAL(error) << "failed to open external browser for login";
             m_networkOk = true;
         }
     }

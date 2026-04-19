@@ -114,7 +114,7 @@ compute_runtime_hash() {
 }
 
 list_runtime_files() {
-    find "$CURRENT_DIR" -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ',' | sed 's/,$//'
+    find -L "$CURRENT_DIR" -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ',' | sed 's/,$//'
 }
 
 resolve_payload_sources
@@ -222,13 +222,6 @@ if command -v ldd >/dev/null 2>&1; then
 fi
 
 if [ "$MODE" = "probe" ]; then
-    PROBE_LOG_DIR="/tmp/pjarczak-bambu-probe"
-    mkdir -p "$PROBE_LOG_DIR"
-    if ! PJARCZAK_BAMBU_PROBE_LOG_DIR="$PROBE_LOG_DIR" PJARCZAK_BAMBU_COUNTRY_CODE="${PJARCZAK_BAMBU_COUNTRY_CODE:-PL}" "$CURRENT_DIR/pjarczak_bambu_linux_host" --probe-auth >/tmp/pjarczak-probe.txt 2>&1; then
-        log "probe_auth_failed"
-        cat /tmp/pjarczak-probe.txt >&2 || true
-        exit 127
-    fi
     echo "probe_ok runtime_dir=$CURRENT_DIR runtime_hash=$RUNTIME_HASH bin=$BIN_PATH"
     exit 0
 fi

@@ -4519,7 +4519,7 @@ void GUI_App::ShowUserLogin(bool show)
                 delete login_dlg;
                 login_dlg = new ZUserLogin();
             }
-            login_dlg->ShowModal();
+            login_dlg->run();
         } catch (std::exception &) {
             ;
         }
