@@ -1,6 +1,7 @@
 name: Build Windows with Linux bridge runtime
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 jobs:

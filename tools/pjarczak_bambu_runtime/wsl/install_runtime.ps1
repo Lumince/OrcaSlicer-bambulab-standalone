@@ -198,6 +198,32 @@ function Invoke-NativeCapture([string]$FilePath, [string[]]$ArgumentList) {
 }
 
 function Test-WslDistroExists([string]$WslPath, [string]$Name, [ref]$Reason) {
+    $list = Invoke-NativeCapture $WslPath @('--list', '--quiet')
+    if ($list.ExitCode -ne 0) {
+        $text = $list.Combined
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            throw 'Failed to query WSL distributions'
+        }
+        throw ("Failed to query WSL distributions: {0}" -f $text)
+    }
+
+    $exists = $false
+    foreach ($line in ($list.StdOut -split "`n")) {
+        $item = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($item)) {
+            continue
+        }
+        if ($item -ieq $Name) {
+            $exists = $true
+            break
+        }
+    }
+
+    if (-not $exists) {
+        $Reason.Value = "WSL distro '$Name' is not installed"
+        return $false
+    }
+
     $probe = Invoke-NativeCapture $WslPath @('-d', $Name, '--user', 'root', '--', 'sh', '-lc', 'true')
     if ($probe.ExitCode -eq 0) {
         $Reason.Value = ''
@@ -205,15 +231,6 @@ function Test-WslDistroExists([string]$WslPath, [string]$Name, [ref]$Reason) {
     }
 
     $text = $probe.Combined
-    $lower = $text.ToLowerInvariant()
-
-    if ($lower.Contains('there is no distribution with the supplied name') -or
-        $lower.Contains('wsl_e_distribution_not_found') -or
-        ($lower.Contains('distribution') -and $lower.Contains('not') -and $lower.Contains('found'))) {
-        $Reason.Value = "WSL distro '$Name' is not installed"
-        return $false
-    }
-
     if ([string]::IsNullOrWhiteSpace($text)) {
         throw "Failed to start WSL distro '$Name'"
     }
@@ -332,7 +349,7 @@ if (!(Test-Path $bootstrapPath)) {
 try {
     & $wsl --status | Out-Null
 } catch {
-    throw 'WSL is not ready. Run as Administrator once and execute: wsl --install --no-distribution ; wsl --update ; then reboot.'
+    throw 'WSL is not ready. Run as Administrator once and enable Microsoft-Windows-Subsystem-Linux and VirtualMachinePlatform, then reboot.'
 }
 
 Convert-FileToLf $bootstrapPath
