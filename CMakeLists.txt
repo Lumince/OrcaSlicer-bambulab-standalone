@@ -883,6 +883,54 @@ function(orcaslicer_copy_dlls target config postfix output_dlls)
 
 endfunction()
 
+function(orcaslicer_copy_sos target config postfix output_sos)
+
+    set(_out_dir "${CMAKE_CURRENT_BINARY_DIR}/src")
+    message(STATUS "set out_dir to CMAKE_CURRENT_BINARY_DIR/src: ${_out_dir}")
+
+    if (EXISTS "/usr/lib/aarch64-linux-gnu/libavcodec.so")
+        file(COPY /usr/lib/aarch64-linux-gnu/libavcodec.so
+                  /usr/lib/aarch64-linux-gnu/libavcodec.so.61
+                  /usr/lib/aarch64-linux-gnu/libavutil.so
+                  /usr/lib/aarch64-linux-gnu/libavutil.so.59
+                  /usr/lib/aarch64-linux-gnu/libswscale.so
+                  /usr/lib/aarch64-linux-gnu/libswscale.so.8
+                  /usr/lib/aarch64-linux-gnu/libswresample.so
+                  /usr/lib/aarch64-linux-gnu/libswresample.so.5
+             DESTINATION ${_out_dir})
+    else()
+        file(COPY ${CMAKE_PREFIX_PATH}/lib/libavcodec.so
+                  ${CMAKE_PREFIX_PATH}/lib/libavcodec.so.61
+                  ${CMAKE_PREFIX_PATH}/lib/libavcodec.so.61.3.100
+                  ${CMAKE_PREFIX_PATH}/lib/libavutil.so
+                  ${CMAKE_PREFIX_PATH}/lib/libavutil.so.59
+                  ${CMAKE_PREFIX_PATH}/lib/libavutil.so.59.8.100
+                  ${CMAKE_PREFIX_PATH}/lib/libswscale.so
+                  ${CMAKE_PREFIX_PATH}/lib/libswscale.so.8
+                  ${CMAKE_PREFIX_PATH}/lib/libswscale.so.8.1.100
+                  ${CMAKE_PREFIX_PATH}/lib/libswresample.so
+                  ${CMAKE_PREFIX_PATH}/lib/libswresample.so.5
+                  ${CMAKE_PREFIX_PATH}/lib/libswresample.so.5.1.100
+             DESTINATION ${_out_dir})
+    endif()
+
+    set(${output_sos}
+        ${_out_dir}/libavcodec.so
+        ${_out_dir}/libavcodec.so.61
+        ${_out_dir}/libavcodec.so.61.3.100
+        ${_out_dir}/libavutil.so
+        ${_out_dir}/libavutil.so.59
+        ${_out_dir}/libavutil.so.59.8.100
+        ${_out_dir}/libswscale.so
+        ${_out_dir}/libswscale.so.8
+        ${_out_dir}/libswscale.so.8.1.100
+        ${_out_dir}/libswresample.so
+        ${_out_dir}/libswresample.so.5
+        ${_out_dir}/libswresample.so.5.1.100
+        PARENT_SCOPE
+    )
+endfunction()
+
 
 # libslic3r, OrcaSlicer GUI and the OrcaSlicer executable.
 add_subdirectory(deps_src)
@@ -928,6 +976,20 @@ elseif (CMAKE_MACOSX_BUNDLE)
 else ()
     install(FILES src/dev-utils/platform/unix/com.orcaslicer.OrcaSlicer.desktop DESTINATION ${CMAKE_INSTALL_PREFIX}/resources/applications)
     install(DIRECTORY "${SLIC3R_RESOURCES_DIR}/" DESTINATION "${CMAKE_INSTALL_PREFIX}/resources")
+endif ()
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT FLATPAK)
+    set(LIBRARY_FILES
+        ${LIBDIR_BIN}/libavcodec.so.61
+        ${LIBDIR_BIN}/libavcodec.so.61.3.100
+        ${LIBDIR_BIN}/libavutil.so.59
+        ${LIBDIR_BIN}/libavutil.so.59.8.100
+        ${LIBDIR_BIN}/libswresample.so.5
+        ${LIBDIR_BIN}/libswresample.so.5.1.100
+        ${LIBDIR_BIN}/libswscale.so.8
+        ${LIBDIR_BIN}/libswscale.so.8.1.100
+    )
+    install(FILES ${LIBRARY_FILES} DESTINATION "${CMAKE_INSTALL_PREFIX}/bin")
 endif ()
 
 install(FILES ${CMAKE_SOURCE_DIR}/LICENSE.txt DESTINATION ".")
