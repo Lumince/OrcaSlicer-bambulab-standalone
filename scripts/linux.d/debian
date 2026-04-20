@@ -28,6 +28,9 @@ REQUIRED_DEV_PACKAGES=(
     libunwind-dev
     libx264-dev
     libxkbcommon-dev
+    libavcodec-dev
+    libavutil-dev
+    libswscale-dev
     nasm
     nlohmann-json3-dev
     clang

@@ -259,7 +259,7 @@ wxSize wxMediaCtrl2::DoGetBestSize() const
 
 void wxMediaCtrl2::DoSetSize(int x, int y, int width, int height, int sizeFlags)
 {
-    wxMediaCtrl::DoSetSize(x, y, width, height, sizeFlags);
+    wxWindow::DoSetSize(x, y, width, height, sizeFlags);
     if (sizeFlags & wxSIZE_USE_EXISTING) return;
     wxMediaCtrl_OnSize(this, m_video_size, width, height);
 }
