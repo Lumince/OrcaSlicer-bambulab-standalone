@@ -88,6 +88,19 @@ std::string run_and_capture(const std::string& command, int* exit_code = nullptr
     return trim_ascii(output);
 }
 
+std::filesystem::path runtime_dir()
+{
+    const auto env_value = required_env("PJARCZAK_MAC_RUNTIME_DIR");
+    if (!env_value.empty())
+        return std::filesystem::path(env_value);
+
+    const auto home = required_env("HOME");
+    if (home.empty())
+        return {};
+
+    return std::filesystem::path(home) / "Library" / "Application Support" / "OrcaSlicer" / "macos-bridge" / "runtime";
+}
+
 std::string configured_instance_name(const std::filesystem::path& plugin_dir)
 {
     const auto env_value = required_env("PJARCZAK_MAC_LIMA_INSTANCE");
@@ -96,24 +109,36 @@ std::string configured_instance_name(const std::filesystem::path& plugin_dir)
     return read_text_file_trimmed(plugin_dir / mac_lima_instance_file_name());
 }
 
-std::string first_missing_runtime_file(const std::filesystem::path& plugin_dir)
+std::string first_missing_runtime_file(const std::filesystem::path& plugin_dir,
+                                       const std::filesystem::path& runtime_dir_path)
 {
-    const std::string required_files[] = {
-        host_executable_file_name(),
-        std::string("pjarczak_bambu_linux_host_abi1"),
-        std::string("pjarczak_bambu_linux_host_abi0"),
+    const std::string plugin_required_files[] = {
         mac_host_wrapper_file_name(),
         mac_runtime_install_script_file_name(),
         mac_runtime_verify_script_file_name(),
-        mac_lima_instance_file_name(),
+        mac_lima_instance_file_name()
+    };
+
+    for (const std::string& name : plugin_required_files) {
+        if (!std::filesystem::exists(plugin_dir / std::filesystem::path(name)))
+            return name;
+    }
+
+    if (runtime_dir_path.empty())
+        return "macOS runtime directory is not resolvable";
+
+    const std::string runtime_required_files[] = {
+        host_executable_file_name(),
+        std::string("pjarczak_bambu_linux_host_abi1"),
+        std::string("pjarczak_bambu_linux_host_abi0"),
         linux_network_library_name(),
         linux_source_library_name(),
         std::string("ca-certificates.crt"),
         std::string("slicer_base64.cer")
     };
 
-    for (const std::string& name : required_files) {
-        if (!std::filesystem::exists(plugin_dir / std::filesystem::path(name)))
+    for (const std::string& name : runtime_required_files) {
+        if (!std::filesystem::exists(runtime_dir_path / std::filesystem::path(name)))
             return name;
     }
 
@@ -177,7 +202,8 @@ std::string launch_preflight_error()
     if (plugin_dir.empty())
         return "bridge launcher could not resolve plugin directory";
 
-    const auto missing_file = first_missing_runtime_file(plugin_dir);
+    const std::filesystem::path runtime_dir_path = runtime_dir();
+    const auto missing_file = first_missing_runtime_file(plugin_dir, runtime_dir_path);
     if (!missing_file.empty())
         return "required macOS runtime file missing: " + missing_file;
 
@@ -198,7 +224,8 @@ LaunchSpec build_default_launch_spec()
     if (plugin_dir.empty())
         return error_launch_spec("bridge launcher could not resolve plugin directory");
 
-    const auto missing_file = first_missing_runtime_file(plugin_dir);
+    const std::filesystem::path runtime_dir_path = runtime_dir();
+    const auto missing_file = first_missing_runtime_file(plugin_dir, runtime_dir_path);
     if (!missing_file.empty())
         return error_launch_spec("required macOS runtime file missing: " + missing_file);
 
@@ -211,16 +238,17 @@ LaunchSpec build_default_launch_spec()
         return error_launch_spec(reason.empty() ? std::string("macOS Lima runtime is not ready") : reason);
 
     const std::filesystem::path wrapper_path = plugin_dir / mac_host_wrapper_file_name();
-    const std::filesystem::path host_path = plugin_dir / host_executable_file_name();
+    const std::filesystem::path host_path = runtime_dir_path / host_executable_file_name();
 
     LaunchSpec spec;
     spec.description = "macOS via Lima linux guest";
     spec.argv = {wrapper_path.string(), host_path.string()};
     spec.env = {
-        {"PJARCZAK_BAMBU_PLUGIN_DIR", plugin_dir.string()},
-        {"PJARCZAK_BAMBU_NETWORK_SO", (plugin_dir / linux_network_library_name()).string()},
-        {"PJARCZAK_BAMBU_SOURCE_SO", (plugin_dir / linux_source_library_name()).string()},
+        {"PJARCZAK_BAMBU_PLUGIN_DIR", runtime_dir_path.string()},
+        {"PJARCZAK_BAMBU_NETWORK_SO", (runtime_dir_path / linux_network_library_name()).string()},
+        {"PJARCZAK_BAMBU_SOURCE_SO", (runtime_dir_path / linux_source_library_name()).string()},
         {"PJARCZAK_BAMBU_REQUIRE_LINUX_GUEST", "1"},
+        {"PJARCZAK_MAC_RUNTIME_DIR", runtime_dir_path.string()},
         {"PJARCZAK_MAC_LIMA_INSTANCE", instance}
     };
     return spec;

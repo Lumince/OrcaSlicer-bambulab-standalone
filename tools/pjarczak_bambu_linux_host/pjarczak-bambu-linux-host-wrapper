@@ -7,9 +7,14 @@ if [ -z "$HOST_PATH" ]; then
     exit 127
 fi
 
+runtime_dir_default() {
+    printf '%s
+' "$HOME/Library/Application Support/OrcaSlicer/macos-bridge/runtime"
+}
+
 PLUGIN_DIR="${PJARCZAK_BAMBU_PLUGIN_DIR:-}"
 if [ -z "$PLUGIN_DIR" ]; then
-    PLUGIN_DIR=$(cd "$(dirname "$HOST_PATH")" && pwd)
+    PLUGIN_DIR=$(runtime_dir_default)
 fi
 
 trim_file() {

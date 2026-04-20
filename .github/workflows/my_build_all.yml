@@ -25,11 +25,16 @@ jobs:
     uses: ./.github/workflows/build_linux_portable.yml
     secrets: inherit
 
+  build_macos:
+    uses: ./.github/workflows/build_macos_bridge.yml
+    secrets: inherit
+
   publish_release:
     name: Publish release assets
     needs:
       - build_windows
       - build_linux
+      - build_macos
     if: ${{ github.event_name == 'push' || github.event_name == 'release' }}
     runs-on: ubuntu-24.04
     permissions:

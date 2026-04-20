@@ -42,19 +42,21 @@ fi
 APP_SUPPORT_DIR="$HOME/Library/Application Support/OrcaSlicer/macos-bridge"
 LOCAL_LIMA_ROOT="$APP_SUPPORT_DIR/lima"
 LOCAL_LIMA_BIN="$LOCAL_LIMA_ROOT/bin"
-mkdir -p "$APP_SUPPORT_DIR" "$LOCAL_LIMA_ROOT"
+RUNTIME_DIR="${PJARCZAK_MAC_RUNTIME_DIR:-$APP_SUPPORT_DIR/runtime}"
+mkdir -p "$APP_SUPPORT_DIR" "$LOCAL_LIMA_ROOT" "$RUNTIME_DIR"
 
 trim_file() {
     local path="$1"
     if [[ ! -f "$path" ]]; then
         return 1
     fi
-    LC_ALL=C tr -d '\r' < "$path" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+    LC_ALL=C tr -d '' < "$path" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
 find_limactl() {
     if [[ -n "${PJARCZAK_LIMACTL:-}" && -x "${PJARCZAK_LIMACTL}" ]]; then
-        printf '%s\n' "$PJARCZAK_LIMACTL"
+        printf '%s
+' "$PJARCZAK_LIMACTL"
         return 0
     fi
     if command -v limactl >/dev/null 2>&1; then
@@ -62,12 +64,14 @@ find_limactl() {
         return 0
     fi
     if [[ -x "$LOCAL_LIMA_BIN/limactl" ]]; then
-        printf '%s\n' "$LOCAL_LIMA_BIN/limactl"
+        printf '%s
+' "$LOCAL_LIMA_BIN/limactl"
         return 0
     fi
     for candidate in /opt/homebrew/bin/limactl /usr/local/bin/limactl; do
         if [[ -x "$candidate" ]]; then
-            printf '%s\n' "$candidate"
+            printf '%s
+' "$candidate"
             return 0
         fi
     done
@@ -76,7 +80,7 @@ find_limactl() {
 
 install_lima_binary_locally() {
     local version
-    version=$(curl -fsSL https://api.github.com/repos/lima-vm/lima/releases/latest | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    version=$(curl -fsSL https://api.github.com/repos/lima-vm/lima/releases/latest | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*//p' | head -n 1)
     if [[ -z "$version" ]]; then
         echo "failed to resolve latest Lima version from GitHub API" >&2
         return 1
@@ -144,6 +148,37 @@ maybe_install_rosetta() {
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
 }
 
+copy_runtime_payload() {
+    local src_dir="$1"
+    local dst_dir="$2"
+    local file
+    local required_files=(
+        libbambu_networking.so
+        libBambuSource.so
+        pjarczak_bambu_linux_host
+        pjarczak_bambu_linux_host_abi1
+        pjarczak_bambu_linux_host_abi0
+        ca-certificates.crt
+        slicer_base64.cer
+    )
+
+    for file in "${required_files[@]}"; do
+        if [[ ! -f "$src_dir/$file" ]]; then
+            echo "missing required runtime payload file: $file" >&2
+            exit 1
+        fi
+        cp -f "$src_dir/$file" "$dst_dir/$file"
+    done
+
+    for file in liblive555.so libagora_rtc_sdk.so libagora-fdkaac.so; do
+        if [[ -f "$src_dir/$file" ]]; then
+            cp -f "$src_dir/$file" "$dst_dir/$file"
+        fi
+    done
+
+    chmod 755 "$dst_dir/pjarczak_bambu_linux_host" "$dst_dir/pjarczak_bambu_linux_host_abi1" "$dst_dir/pjarczak_bambu_linux_host_abi0"
+}
+
 INSTANCE="${PJARCZAK_MAC_LIMA_INSTANCE:-}"
 if [[ -z "$INSTANCE" ]]; then
     INSTANCE=$(trim_file "$PLUGIN_DIR/pjarczak_lima_instance.txt" || true)
@@ -154,6 +189,7 @@ fi
 
 ensure_lima_installed
 maybe_install_rosetta
+copy_runtime_payload "$PLUGIN_DIR" "$RUNTIME_DIR"
 
 START_ARGS=(start "--name=${INSTANCE}" --mount-writable)
 MACOS_MAJOR=$(sw_vers -productVersion | awk -F. '{print $1}')
@@ -174,4 +210,5 @@ fi
 
 "$LIMACTL" start-at-login "$INSTANCE" --enabled >/dev/null 2>&1 || true
 "$LIMACTL" shell "$INSTANCE" -- /usr/bin/env true >/dev/null
-printf 'runtime installed\n'
+printf 'runtime installed
+'
