@@ -91,7 +91,7 @@ ZUserLogin::ZUserLogin() : wxDialog((wxWindow *) (wxGetApp().mainframe), wxID_AN
     const auto bblnetwork_enabled =wxGetApp().app_config->get_bool("installed_networking");
     // Url
     NetworkAgent* agent = wxGetApp().getAgent();
-    if (!agent && bblnetwork_enabled) {
+    if (!agent) {
 
         SetBackgroundColour(*wxWHITE);
 

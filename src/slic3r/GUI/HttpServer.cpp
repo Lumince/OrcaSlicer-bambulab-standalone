@@ -78,9 +78,12 @@ void TicketLoginTask::perform_async(const std::string& ticket, std::function<voi
 {
     boost::thread([cb = std::move(cb), ticket]() {
         auto login_info = do_request_login_info(ticket);
-        GUI::wxGetApp().CallAfter([cb, login_info = std::move(login_info)]() mutable {
-            cb(login_info ? *login_info : std::string());
-        });
+        auto result = login_info ? *login_info : std::string();
+        if (wxTheApp) {
+            wxTheApp->CallAfter([cb, result = std::move(result)]() mutable { cb(std::move(result)); });
+        } else {
+            cb(result);
+        }
     }).detach();
 }
 
