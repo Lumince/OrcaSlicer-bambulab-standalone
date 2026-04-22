@@ -50,8 +50,7 @@ trim_file() {
     if [[ ! -f "$path" ]]; then
         return 1
     fi
-    LC_ALL=C tr -d '
-' < "$path" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+    LC_ALL=C tr -d '\r' < "$path" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
 find_limactl() {

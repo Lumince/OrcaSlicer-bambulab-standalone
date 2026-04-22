@@ -299,7 +299,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
     if (pj_bridge && loaded_version.empty()) {
         set_load_error(
             "Linux bridge payload not ready",
-            "Bridge DLL loaded, but the WSL2 linux payload handshake did not return a version",
+            "Bridge module loaded, but the linux payload handshake did not return a version",
             library
         );
         unload();

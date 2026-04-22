@@ -4285,6 +4285,16 @@ void PartPlateList::reset(bool do_init)
 }
 
 //reset partplate to init states
+void PartPlateList::detach_plater()
+{
+	m_plater = nullptr;
+	for (PartPlate* plate : m_plate_list) {
+		if (plate != nullptr)
+			plate->detach_plater();
+	}
+	unprintable_plate.detach_plater();
+}
+
 void PartPlateList::reinit()
 {
 	clear(true, true);

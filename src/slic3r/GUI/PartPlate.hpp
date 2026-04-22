@@ -700,6 +700,7 @@ public:
 
     //reset partplate to init states
     void reinit();
+    void detach_plater();
 
     //get the plate stride
     double plate_stride_x();
