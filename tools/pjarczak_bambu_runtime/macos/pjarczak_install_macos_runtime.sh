@@ -31,6 +31,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Accepted for parity with the Windows runtime installer; macOS uses PLUGIN_DIR directly.
+: "$PLUGIN_CACHE_DIR"
+
 if [[ -z "$PLUGIN_DIR" ]]; then
     PLUGIN_DIR="$PACKAGE_DIR"
 fi
